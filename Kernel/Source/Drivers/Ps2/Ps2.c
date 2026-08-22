@@ -95,73 +95,36 @@ static BOOL Ps2WaitAck(INT TimeoutMs) {
 }
 
 // ============================================================================
-// Checking for the presence of a second port
-// ============================================================================
-
-static BOOL Ps2DetectSecondPort(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: detecting second port...\n");
-    
-    // 1. Read current config
-    UINT8 SavedConfig = Ps2ReadWithCommand(PS2_CMD_READ_CONFIG);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: config = 0x%02X\n", SavedConfig);
-    
-    // 2. Attempting to enable port 2 (clearing bit 5 – disable).
-    UINT8 TestConfig = SavedConfig & ~PS2_CONFIG_PORT2_DISABLE;
-    Ps2WriteWithCommand(PS2_CMD_WRITE_CONFIG, TestConfig);
-    
-    // 3. Small delay
-    TimerMdelay(1);
-    
-    // 4. Read the configuration back
-    UINT8 ConfigAfter = Ps2ReadWithCommand(PS2_CMD_READ_CONFIG);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: config after = 0x%02X\n", ConfigAfter);
-    
-    // 5. Restoring the original configuration
-    Ps2WriteWithCommand(PS2_CMD_WRITE_CONFIG, SavedConfig);
-    
-    // 6. Attempting to enable port 2 (clearing bit 5 – disable),
-    //    this means the controller could not enable the port - there is physically no port
-    if (ConfigAfter & PS2_CONFIG_PORT2_DISABLE) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: second port not present\n");
-        return FALSE;
-    }
-    
-    // 7. Additional check: testing port 2
-    UINT8 TestResult = Ps2ReadWithCommand(PS2_CMD_TEST_PORT2);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port2 test result = 0x%02X\n", TestResult);
-    
-    if (TestResult != 0x00) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port2 test failed\n");
-        return FALSE;
-    }
-    
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: second port detected\n");
-    return TRUE;
-}
-
-// ============================================================================
 // Device discovery on a port
 // ============================================================================
 
 static UINT8 Ps2DetectDevice(UINT8 Port) {
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: detecting device on port %d...\n", Port);
+
+    if (Port == 2) {
+        // Try to enable port 2 in config (may not work on some hardware)
+        UINT8 Config = Ps2ReadWithCommand(PS2_CMD_READ_CONFIG);
+        Config &= ~PS2_CONFIG_PORT2_DISABLE;
+        Ps2WriteWithCommand(PS2_CMD_WRITE_CONFIG, Config);
+        TimerMdelay(10);
+    }
     
-    // 1. Turn on the port
+    // Enable the port
     UINT8 EnableCmd = (Port == 1) ? PS2_CMD_ENABLE_PORT1 : PS2_CMD_ENABLE_PORT2;
     Ps2SendCommand(EnableCmd);
-    TimerMdelay(30);  // Let's let the port stabilize
+    TimerMdelay(30);
     
-    // 2. Clear buffer
+    // Clear buffer
     Ps2FlushOutput();
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: buffer flushed\n", Port);
     
-    // 3. Send RESET
+    // Send RESET
     Ps2WritePort(Port, PS2_DEV_CMD_RESET);
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: RESET sent\n", Port);
     
-    // 4. Wait ACK (0xFA)
+    // Wait ACK (0xFA)
     UINT8 Response = 0;
-    INT Timeout = 300;  // 300 ms
+    INT Timeout = 500;
     BOOL GotAck = FALSE;
     
     while (Timeout--) {
@@ -174,7 +137,6 @@ static UINT8 Ps2DetectDevice(UINT8 Port) {
                 BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: ACK received\n", Port);
                 break;
             } else {
-                // Ignore garbage bytes
                 BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: ignoring garbage 0x%02X\n", Port, Response);
             }
         }
@@ -186,23 +148,24 @@ static UINT8 Ps2DetectDevice(UINT8 Port) {
         return PS2_DEVICE_UNKNOWN;
     }
     
-    // 5. Wait BAT (0xAA)
+    // Wait BAT (0xAA)
     Response = 0;
-    Timeout = 500;
+    Timeout = 1000;
     BOOL GotBat = FALSE;
     
     while (Timeout--) {
         if (Ps2ReadStatus() & PS2_STATUS_OUTPUT_FULL) {
             Response = Ps2ReadData();
-            BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: read byte = 0x%02X\n", Port, Response);
-            
+        
             if (Response == PS2_RESPONSE_BAT_OK) {
                 GotBat = TRUE;
                 BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: BAT OK (0xAA)\n", Port);
                 break;
-            } else {
-                BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: ignoring 0x%02X (waiting for BAT)\n", Port, Response);
+            } else if (Response == 0xFC) {
+                BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: BAT ERROR (0xFC)\n", Port);
+                return PS2_DEVICE_UNKNOWN;
             }
+            BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: ignoring 0x%02X, waiting for BAT\n", Port, Response);
         }
         TimerMdelay(1);
     }
@@ -212,14 +175,13 @@ static UINT8 Ps2DetectDevice(UINT8 Port) {
         return PS2_DEVICE_UNKNOWN;
     }
     
-    // 6. A short pause and clearing the buffer
     TimerMdelay(20);
     Ps2FlushOutput();
     
+    // Send IDENTIFY
     Ps2WritePort(Port, PS2_DEV_CMD_IDENTIFY);
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: IDENTIFY sent\n", Port);
     
-    // 8. Wait ACK in IDENTIFY
     Timeout = 200;
     GotAck = FALSE;
     
@@ -240,7 +202,7 @@ static UINT8 Ps2DetectDevice(UINT8 Port) {
         TimerMdelay(1);
     }
     
-    // 9. Read ID
+    // Read ID
     UINT8 Id1 = 0xFF, Id2 = 0xFF;
     
     if (Response != PS2_RESPONSE_ACK) {
@@ -248,28 +210,34 @@ static UINT8 Ps2DetectDevice(UINT8 Port) {
         BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: ID1 = 0x%02X (from response)\n", Port, Id1);
     } else {
         Timeout = 200;
+        BOOL GotId = FALSE;
         while (Timeout--) {
             if (Ps2ReadStatus() & PS2_STATUS_OUTPUT_FULL) {
                 Id1 = Ps2ReadData();
                 BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: ID1 = 0x%02X\n", Port, Id1);
+                GotId = TRUE;
                 break;
             }
             TimerMdelay(1);
         }
+        if (!GotId) {
+            BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: ID1 timeout\n", Port);
+            return PS2_DEVICE_UNKNOWN;
+        }
     }
     
-    // 10. Trying to read the second ID byte (if any)
     TimerMdelay(5);
     if (Ps2ReadStatus() & PS2_STATUS_OUTPUT_FULL) {
         Id2 = Ps2ReadData();
         BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: ID2 = 0x%02X\n", Port, Id2);
     }
     
-    // 11. Detect device type
+    Ps2FlushOutput();
+    
+    // Detect device type
     UINT8 DeviceType = PS2_DEVICE_UNKNOWN;
     
     if (Port == 1) {
-        // Keyboard: 0xAB (with translation) or 0x83 (without translation)
         if (Id1 == 0xAB || Id1 == 0x83) {
             DeviceType = PS2_DEVICE_KEYBOARD;
             BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: keyboard detected (ID=0x%02X)\n", Port, Id1);
@@ -280,7 +248,6 @@ static UINT8 Ps2DetectDevice(UINT8 Port) {
             BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: unknown device (ID=0x%02X)\n", Port, Id1);
         }
     } else {
-        // Port 2 — mouse
         if (Id1 == 0x00) {
             DeviceType = PS2_DEVICE_MOUSE;
             BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: standard mouse\n", Port);
@@ -298,6 +265,27 @@ static UINT8 Ps2DetectDevice(UINT8 Port) {
         }
     }
     
+    // Enable the device so it starts sending packets
+    if (DeviceType != PS2_DEVICE_UNKNOWN) {
+        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: enabling device...\n", Port);
+        
+        Ps2WritePort(Port, PS2_DEV_CMD_ENABLE);
+        TimerMdelay(10);
+        
+        UINT8 EnableAck = 0;
+        INT EnableTimeout = 200;
+        while (EnableTimeout--) {
+            if (Ps2ReadStatus() & PS2_STATUS_OUTPUT_FULL) {
+                EnableAck = Ps2ReadData();
+                BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: enable response = 0x%02X\n", Port, EnableAck);
+                break;
+            }
+            TimerMdelay(1);
+        }
+        
+        Ps2FlushOutput();
+    }
+    
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: port %d: detection complete, device type=0x%02X\n", Port, DeviceType);
     return DeviceType;
 }
@@ -309,19 +297,20 @@ static UINT8 Ps2DetectDevice(UINT8 Port) {
 static INT Ps2ControllerInit(VOID) {
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: initializing controller...\n");
     
-    // 1. Disable ports during initialization
+    // Disable ports during initialization
     Ps2SendCommand(PS2_CMD_DISABLE_PORT1);
     Ps2SendCommand(PS2_CMD_DISABLE_PORT2);
     Ps2FlushOutput();
     
-    // 2. Read the configuration
     UINT8 Config = Ps2ReadWithCommand(PS2_CMD_READ_CONFIG);
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: initial config = 0x%02X\n", Config);
     
-    // 3. Detecting second port
-    GPs2Controller.DualChannel = Ps2DetectSecondPort();
+    // ALWAYS assume second port exists.
+    // If there is no device, Ps2DetectDevice(2) will return UNKNOWN.
+    GPs2Controller.DualChannel = TRUE;
+    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: assuming dual channel (port 2 always present)\n");
     
-    // 4. Controller test
+    // Controller test
     Ps2SendCommand(PS2_CMD_TEST_CONTROLLER);
     UINT8 TestResult = Ps2ReadData();
     
@@ -332,14 +321,10 @@ static INT Ps2ControllerInit(VOID) {
     
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: controller test passed\n");
     
-    // 5. Setting config
+    // Set config
     Config = PS2_CONFIG_SYSTEM;
-    
-    // Clear the disable and clock override bits.
     Config &= ~(PS2_CONFIG_PORT1_DISABLE | PS2_CONFIG_PORT2_DISABLE);
-
     Config &= ~PS2_CONFIG_PORT1_CLOCK;
-    
     Config |= PS2_CONFIG_PORT1_TRANS;
     
     Ps2WriteWithCommand(PS2_CMD_WRITE_CONFIG, Config);
@@ -361,28 +346,23 @@ INT Ps2Init(VOID) {
         RETURN(SUCCESS);
     }
     
-    // Clearing struct
     MemSet(&GPs2Controller, 0, sizeof(Ps2Controller));
     
-    // 1. Controller initialization
     INT Result = Ps2ControllerInit();
     if (Result != SUCCESS) {
         BaseconPrintf(BASECON_TYPE_ERROR, "ps2: controller init failed\n");
         RETURN(Result);
     }
     
-    // 2. Device discovery (without configuration)
+    // Detect devices
     GPs2Controller.Port1.Type = Ps2DetectDevice(1);
     GPs2Controller.Port1.Present = (GPs2Controller.Port1.Type != PS2_DEVICE_UNKNOWN);
     
-    if (GPs2Controller.DualChannel) {
-        GPs2Controller.Port2.Type = Ps2DetectDevice(2);
-        GPs2Controller.Port2.Present = (GPs2Controller.Port2.Type != PS2_DEVICE_UNKNOWN);
-    } else {
-        GPs2Controller.Port2.Present = FALSE;
-        GPs2Controller.Port2.Type = PS2_DEVICE_UNKNOWN;
-    }
-
+    // Always try to detect on port 2
+    GPs2Controller.Port2.Type = Ps2DetectDevice(2);
+    GPs2Controller.Port2.Present = (GPs2Controller.Port2.Type != PS2_DEVICE_UNKNOWN);
+    
+    // Enable interrupts
     UINT8 FinalConfig = Ps2ReadWithCommand(PS2_CMD_READ_CONFIG);
     FinalConfig |= PS2_CONFIG_PORT1_INT;
     if (GPs2Controller.DualChannel) {
@@ -390,7 +370,7 @@ INT Ps2Init(VOID) {
     }
     Ps2WriteWithCommand(PS2_CMD_WRITE_CONFIG, FinalConfig);
     
-    // 3. Register driver
+    // Register driver
     KDriverRegister(KDriverGenerateStruct("PS/2", 0, TRUE, &GPs2Controller, NULLPTR));
     
     GPs2Controller.Initialized = TRUE;
@@ -433,7 +413,6 @@ BOOL Ps2IsMousePresent(VOID) {
 VOID Ps2SetKeyboardLED(UINT8 LED) {
     if (!Ps2IsKeyboardPresent()) return;
     
-    // Sending LED
     Ps2SendCommand(PS2_CMD_ENABLE_PORT1);
     TimerMdelay(1);
     

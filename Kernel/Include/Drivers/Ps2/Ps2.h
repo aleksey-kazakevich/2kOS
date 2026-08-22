@@ -78,7 +78,7 @@
 #define PS2_RESPONSE_ACK         0xFA
 #define PS2_RESPONSE_RESEND      0xFE
 #define PS2_RESPONSE_BAT_OK      0xAA
-#define PS2_RESPONSE_BAT_FAIL    0xFC
+#define PS2_RESPONSE_BAT_ERROR   0xFC
 
 // ============================================================================
 // Device types
