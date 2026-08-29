@@ -1,12 +1,12 @@
-#include <Scheduler.h>
-#include <Lib/String.h>
 #include <Mem/Allocator.h>
 #include <Mem/PhysAlloc.h>
+#include <Lib/String.h>
 #include <Mem/Paging.h>
-#include <Fatal.h>
+#include <Scheduler.h>
 #include <Asm/Cpu.h>
-#include <Tss.h>
 #include <Return.h>
+#include <Fatal.h>
+#include <Tss.h>
 
 EXTERN(UINT8, StackStart);
 EXTERN(UINT8, StackEnd);

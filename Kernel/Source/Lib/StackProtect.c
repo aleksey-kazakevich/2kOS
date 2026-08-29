@@ -1,5 +1,5 @@
-#include <Types.h>
 #include <Asm/Cpu.h>
+#include <Types.h>
 
 UINTPTR __stack_chk_guard = 0xBAAAD00Du;
 

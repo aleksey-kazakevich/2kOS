@@ -1,13 +1,14 @@
-#include <Time/Timer.h>
-#include <Drivers/Apic/Apic.h>
-#include <Drivers/Apic/ApicRegs.h>
+#include <Drivers/Irq/Apic/ApicRegs.h>
+#include <Drivers/Irq/Apic/Ioapic.h>
+#include <Drivers/Irq/Apic/Apic.h>
+#include <Time/TimerSubscriber.h>
 #include <Drivers/Acpi/Acpi.h>
 #include <Drivers/Hpet.h>
-#include <Return.h>
-#include <Asm/Cpu.h>
-#include <Asm/Io.h>
+#include <Time/Timer.h>
 #include <Time/Clock.h>
-#include <Drivers/Apic/Ioapic.h>
+#include <Asm/Cpu.h>
+#include <Return.h>
+#include <Asm/Io.h>
 
 volatile UINT32 Seconds = 0;
 BOOL TimerInitialized = FALSE;
@@ -344,6 +345,9 @@ VOID TimerInit(UINT32 DesiredFreq) {
     ApicWriteReg(LAPIC_TIMER_DIV, TIMER_DIV_16);
     ApicWriteReg(LAPIC_LVT_TIMER, TIMER_VECTOR | TIMER_PERIODIC);
     ApicWriteReg(LAPIC_TIMER_INITCNT, InitValue);
+
+    TimerSubscriberInit();
+
     TimerInitialized = TRUE;
 }
 
@@ -355,6 +359,8 @@ VOID TimerHandler(VOID) {
         ClockTick();
     }
     
+    TimerSubscriberTick();
+
     ApicEoi();
 }
 

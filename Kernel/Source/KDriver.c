@@ -1,6 +1,6 @@
+#include <Lib/String.h>
 #include <KDriver.h>
 #include <Return.h>
-#include <Lib/String.h>
 
 static ListHead GKDriverList;
 static UINT32 GKDriverCount = 0;

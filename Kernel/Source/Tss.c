@@ -1,5 +1,5 @@
-#include <Asm/Cpu.h>
 #include <Lib/String.h>
+#include <Asm/Cpu.h>
 #include <Types.h>
 
 static UINT8 DfStack[4096] ATTRIBUTE(aligned(16));

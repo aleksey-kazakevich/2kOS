@@ -2,9 +2,7 @@
 
 #include <Types.h>
 
-/*
- * Local APIC Register Map
- */
+/* Local APIC Register Map */
 #define LAPIC_ID                0x020
 #define LAPIC_VERSION           0x030
 #define LAPIC_TPR               0x080
@@ -32,9 +30,7 @@
 #define LAPIC_TIMER_DIV         0x3E0
 #define APIC_VERSION_MASK       0xFF
 
-/*
- * LVT bits
- */
+/* LVT bits */
 #define LVT_MASKED              (1 << 16)
 #define LVT_TRIGGER_LEVEL        (1 << 15)
 #define LVT_REMOTE_IRR           (1 << 14)
@@ -42,24 +38,18 @@
 #define LVT_DELIVERY_STATUS      (1 << 12)
 #define LVT_DEST_MODE            (1 << 11)
 
-/*
- * Delivery Mode
- */
+/* Delivery Mode */
 #define DELIVERY_FIXED           (0 << 8)
 #define DELIVERY_SMI             (2 << 8)
 #define DELIVERY_NMI             (4 << 8)
 #define DELIVERY_INIT            (5 << 8)
 #define DELIVERY_EXTINT          (7 << 8)
 
-/*
- * Timer Mode
- */
+/* Timer Mode */
 #define TIMER_ONESHOT            (0 << 17)
 #define TIMER_PERIODIC           (1 << 17)
 
-/*
- * Timer Divide
- */
+/* Timer Divide */
 #define TIMER_DIV_2              0x0
 #define TIMER_DIV_4              0x1
 #define TIMER_DIV_8              0x2
@@ -69,25 +59,19 @@
 #define TIMER_DIV_128            0xA
 #define TIMER_DIV_256            0xB
 
-/*
- * ICR shortcuts
- */
+/* ICR shortcuts */
 #define ICR_DEST_SELF            (0x1 << 18)
 #define ICR_DEST_ALL             (0x2 << 18)
 #define ICR_DEST_ALL_BUT_SELF    (0x3 << 18)
 
-/*
- * ============================================================================= IO APIC Register Map ============================================================================
- */
+/* ============================================================================= IO APIC Register Map ============================================================================ */
 
 #define IOAPIC_ID                0x00
 #define IOAPIC_VERSION           0x01
 #define IOAPIC_ARB               0x02
 #define IOAPIC_REDIR_TABLE       0x10
 
-/*
- * Redirection Entry Bits
- */
+/* Redirection Entry Bits */
 #define IOAPIC_REDIR_VECTOR      0x000000FF
 #define IOAPIC_REDIR_DELIVERY    0x00000700
 #define IOAPIC_REDIR_DEST_MODE   0x00000800
@@ -114,17 +98,13 @@
 #define ICR_LEVEL_ASSERT         (1 << 14)
 #define ICR_LEVEL_DEASSERT       (0 << 14)
 
-/*
- * IA32_APIC_BASE MSR (0x1B)
- */
+/* IA32_APIC_BASE MSR (0x1B) */
 #define IA32_APIC_BASE_MSR       0x1B
 #define APIC_BASE_ENABLE         (1ULL << 11)
 #define APIC_BASE_X2APIC         (1ULL << 10)
 #define APIC_BASE_ADDR_MASK      0xFFFFFF000ULL
 
-/*
- * x2APIC MSR addresses (offset >> 4 + 0x800)
- */
+/* x2APIC MSR addresses (offset >> 4 + 0x800) */
 #define X2APIC_MSR_BASE          0x800
 #define X2APIC_MSR_ID            0x802
 #define X2APIC_MSR_VERSION       0x803

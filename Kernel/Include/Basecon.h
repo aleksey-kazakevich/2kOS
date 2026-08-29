@@ -1,7 +1,7 @@
 #pragma once
 
-#include <Types.h>
 #include <Drivers/Framebuffer.h>
+#include <Types.h>
 
 // Input buffer
 #define BASECON_INPUT_BUFFER_SIZE 256

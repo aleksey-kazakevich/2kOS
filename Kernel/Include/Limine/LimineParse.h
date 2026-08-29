@@ -2,8 +2,8 @@
 
 #pragma once
 
-#include <Types.h>
 #include <Limine/limine.h>
+#include <Types.h>
 
 extern struct limine_framebuffer_request      fb_req;
 extern struct limine_memmap_request          memmap_req;
@@ -11,7 +11,7 @@ extern struct limine_hhdm_request            hhdm_req;
 extern struct limine_executable_address_request  kernel_addr_req;
 extern struct limine_firmware_type_request firmware_req;
 extern struct limine_rsdp_request rsdp_req;
-extern struct limine_mp_request smp_req;
+extern struct limine_executable_cmdline_request cmdline_req;
 
 // Framebuffer
 BOOL LimineFramebufferAvailable(VOID);
@@ -38,3 +38,6 @@ UINT64 LimineGetTotalMemory(VOID);
 
 BOOL IsUefi(VOID);
 UINT64 LimineGetRsdp(VOID);
+
+const CHAR* LimineGetCmdLine(VOID);
+BOOL LimineCmdLineAvailable(VOID);

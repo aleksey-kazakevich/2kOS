@@ -1,7 +1,7 @@
 #pragma once
 
-#include <Types.h>
 #include "AcpiTables.h"
+#include <Types.h>
 
 // ============================================================================
 // Processor Info

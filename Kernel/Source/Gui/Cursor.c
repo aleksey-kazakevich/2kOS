@@ -1,11 +1,11 @@
-#include <Gui/Cursor.h>
+#include "../Drivers/Framebuffer/Private.h"
 #include <Drivers/Ps2/Ps2Mouse.h>
 #include <Drivers/Framebuffer.h>
-#include <Basecon.h>
 #include <Mem/Allocator.h>
+#include <Gui/Cursor.h>
+#include <Basecon.h>
 #include <Return.h>
 #include <Rgb.h>
-#include "../Drivers/Framebuffer/Private.h"
 
 // ============================================================================
 // CURSOR 16x16 (full arrow with stem)
@@ -111,7 +111,7 @@ static VOID RenderCursor(VOID) {
                     UINT16 BitRight = 1 << (15 - (X + 1));
                     if (!(Row & BitRight)) IsBorder = TRUE;
                 } else if (!IsBorder && X == W - 1) {
-                    IsBorder = TRUE; // Правая граница
+                    IsBorder = TRUE; // Right border
                 }
                 
                 // If it is a border - draw in black, otherwise - use the primary color.

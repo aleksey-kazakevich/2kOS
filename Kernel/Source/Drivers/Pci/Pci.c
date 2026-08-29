@@ -1,10 +1,10 @@
-#include <Drivers/Pci.h>
-#include <Asm/Io.h>
 #include <Mem/Allocator.h>
+#include <Drivers/Pci.h>
 #include <Lib/String.h>
-#include <Types.h>
 #include <KDriver.h>
+#include <Asm/Io.h>
 #include <Return.h>
+#include <Types.h>
 
 VOID PciScanBus(UINT8 Bus);
 UINT32 PciReadAddr(UINT8 Bus, UINT8 Slot, UINT8 Func, UINT8 Offset);
@@ -76,7 +76,7 @@ UINT8 PciFindCap(PciDevice *Dev, UINT8 CapId) {
 
 // PCIe detection
 static VOID PciDetectPciE(PciDevice *Dev) {
-    Dev->PciECapOffset = PciFindCap(Dev, 0x10); //  PCIe Capability ID
+    Dev->PciECapOffset = PciFindCap(Dev, 0x10); // PCIe Capability ID
     
     if (!Dev->PciECapOffset) {
         Dev->IsPciE = FALSE;
@@ -90,19 +90,19 @@ static VOID PciDetectPciE(PciDevice *Dev) {
     Dev->PciEVersion = (PciECap >> 16) & 0xF;
     Dev->PciEType = (PciECap >> 20) & 0xF;
     
-    //  Link Capabilities
+    // Link Capabilities
     UINT32 LinkCap = PciRead(Dev, Dev->PciECapOffset + 0x0C);
     Dev->MaxLinkSpeed = LinkCap & 0xF;
     Dev->MaxLinkWidth = (LinkCap >> 4) & 0x3F;
     
-    //  Link Status
+    // Link Status
     UINT16 LinkStatus = PciRead(Dev, Dev->PciECapOffset + 0x12) & 0xFFFF;
     Dev->LinkSpeed = LinkStatus & 0xF;
     Dev->LinkWidth = (LinkStatus >> 4) & 0x3F;
     
-    //  MSI/MSI-X
-    Dev->MsiCapOffset = PciFindCap(Dev, 0x05); //  MSI
-    Dev->MsiXCapOffset = PciFindCap(Dev, 0x11); //  MSI-X
+    // MSI/MSI-X
+    Dev->MsiCapOffset = PciFindCap(Dev, 0x05); // MSI
+    Dev->MsiXCapOffset = PciFindCap(Dev, 0x11); // MSI-X
 }
 
 // Detecting BAR registers
@@ -124,7 +124,7 @@ static VOID PciDetectBars(PciDevice *Dev) {
         
         // Determining the BAR type
         if (Bar & 0x01) {
-            //  I/O Space BAR
+            // I/O Space BAR
             Dev->BarTypes[I] = 2;
             PciWrite(Dev, Offset, 0xFFFFFFFF);
             UINT32 Size = PciRead(Dev, Offset);
@@ -133,10 +133,10 @@ static VOID PciDetectBars(PciDevice *Dev) {
             Dev->Bars[I] = Bar & 0xFFFFFFFC;
             Dev->BarSizes[I] = Size;
         } else {
-            //  Memory Space BAR
+            // Memory Space BAR
             UINT8 Type = (Bar >> 1) & 0x03;
             
-            if (Type == 0x00) { //  32-bit
+            if (Type == 0x00) { // 32-bit
                 Dev->BarTypes[I] = 0;
                 PciWrite(Dev, Offset, 0xFFFFFFFF);
                 UINT32 Size = PciRead(Dev, Offset);
@@ -144,7 +144,7 @@ static VOID PciDetectBars(PciDevice *Dev) {
                 PciWrite(Dev, Offset, Bar);
                 Dev->Bars[I] = Bar & 0xFFFFFFF0;
                 Dev->BarSizes[I] = Size;
-            } else if (Type == 0x02) { //  64-bit
+            } else if (Type == 0x02) { // 64-bit
                 Dev->BarTypes[I] = 1;
                 if (I < 5) {
                     // Processing as 64-bit
@@ -274,14 +274,14 @@ VOID PciInit(VOID) {
     UINT8 HeaderType = (PciRead(&TempDev, 0x0C) >> 16) & 0xFF;
     
     if (HeaderType & 0x80) {
-        //  Multiple host controllers
+        // Multiple host controllers
         for (UINT8 Func = 0; Func < 8; Func++) {
             if (PciReadVendor(0, 0, Func) != PCI_INVALID_VENDOR) {
                 PciScanBus(Func);
             }
         }
     } else {
-        //  Single host controller
+        // Single host controller
         PciScanBus(0);
     }
 
@@ -330,7 +330,7 @@ PciDevice* PciFindClass(UINT8 ClassCode, UINT8 SubClass) {
 
 // Turning on the device
 VOID PciEnable(PciDevice *Dev) {
-    Dev->Command |= (1 << 0) | (1 << 1) | (1 << 2); //  I/O, Memory, Bus Master
+    Dev->Command |= (1 << 0) | (1 << 1) | (1 << 2); // I/O, Memory, Bus Master
     PciWrite(Dev, 0x04, Dev->Command);
 }
 
@@ -362,11 +362,11 @@ INT PciEnableMsi(PciDevice *Dev, UINT8 Vector, UINT32 ApicId) {
     UINT8 MaskOffset = PerVectorMask ? (Is64Bit ? Offset + 16 : Offset + 12) : 0;
     
     // Set the MSI address (APIC)
-    UINT32 MsiAddr = 0xFEE00000 | (ApicId << 24);  //  Physical destination mode
+    UINT32 MsiAddr = 0xFEE00000 | (ApicId << 24);  // Physical destination mode
     PciWrite(Dev, AddrOffset, MsiAddr);
     
     if (Is64Bit) {
-        PciWrite(Dev, AddrOffset + 4, 0);  //  Upper 32 bits = 0
+        PciWrite(Dev, AddrOffset + 4, 0);  // Upper 32 bits = 0
     }
     
     // Set the data (interrupt vector)
@@ -375,7 +375,7 @@ INT PciEnableMsi(PciDevice *Dev, UINT8 Vector, UINT32 ApicId) {
     // If there is masking, we will unmask
     if (PerVectorMask && MaskOffset) {
         UINT32 MaskBits = PciRead(Dev, MaskOffset);
-        MaskBits &= ~1;  //  Clear mask for vector 0
+        MaskBits &= ~1;  // Clear mask for vector 0
         PciWrite(Dev, MaskOffset, MaskBits);
     }
     
@@ -403,7 +403,7 @@ INT PciEnableMsiX(PciDevice *Dev, INT NumVectors, UINT8 VectorBase, UINT32 ApicI
     UINT32 PbaBir = PciRead(Dev, Offset + 8);
     
     // Turn on MSI-X
-    MsgControl |= (1 << 15);  //  Enable MSI-X
+    MsgControl |= (1 << 15);  // Enable MSI-X
     PciWrite(Dev, Offset + 2, MsgControl);
     
     Dev->MsiXEnabled = TRUE;

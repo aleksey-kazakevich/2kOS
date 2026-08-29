@@ -1,24 +1,20 @@
+#include <Drivers/Irq/Apic/Ioapic.h>
+#include <Drivers/Irq/Apic/Apic.h>
+#include <Drivers/Disk/DiskMgr.h>
 #include <Drivers/Disk/Pata.h>
-#include <Asm/Io.h>
-#include <Lib/String.h>
-#include <Idt.h>
-#include <Drivers/Apic/Ioapic.h>
-#include <Types.h>
 #include <InterruptList.h>
-#include <KDriver.h>
-#include <Drivers/Apic/Apic.h>
-#include <Return.h>
 #include <Mem/PhysAlloc.h>
-#include <SpinLock.h>
+#include <Lib/String.h>
 #include <Mem/Paging.h>
 #include <Time/Timer.h>
-#include <Drivers/Disk/DiskMgr.h>
+#include <SpinLock.h>
+#include <KDriver.h>
+#include <Asm/Io.h>
+#include <Return.h>
+#include <Types.h>
+#include <Idt.h>
 
-/*
- * ============================================================================
- * Global State
- * ============================================================================
- */
+/* ============================================================================ Global State ============================================================================ */
 static volatile PataDrive* PrimaryIrqDrive = NULLPTR;
 static volatile PataDrive* SecondaryIrqDrive = NULLPTR;
 
@@ -30,18 +26,14 @@ static PataRequest *SecondaryRequestTail = NULLPTR;
 static SpinLock GPrimaryQueueLock;
 static SpinLock GSecondaryQueueLock;
 
-// NEW: Статистика
+// NEW: Statistics
 static UINT32 GDmaFailures = 0;
 static UINT32 GPioFallbacks = 0;
 
 PataDrive PataDrives[4];
 static Disk GPataDiskObjects[4];
 
-/*
- * ============================================================================
- * Helper Functions
- * ============================================================================
- */
+/* ============================================================================ Helper Functions ============================================================================ */
 static inline VOID IoDelay(UINT16 CtrlPort) {
     Inb(CtrlPort + PATA_ALTSTATUS);
     Inb(CtrlPort + PATA_ALTSTATUS);
@@ -114,11 +106,7 @@ static VOID ReadSectorWordsTo(UINT16 Base, UINT16 AlignedWords[256]) {
         AlignedWords[I] = Inw(Base + PATA_DATA);
 }
 
-/*
- * ============================================================================
- * Improved PRDT Management
- * ============================================================================
- */
+/* ============================================================================ Improved PRDT Management ============================================================================ */
 static PrdtEntry* PataAllocPrdt(VOID *PhysBuffer, UINT32 SectorCount, UINT16 *PrdtPhys) {
     UINT32 EntriesNeeded = (SectorCount + 62) / 63;
     if (EntriesNeeded > PRDT_ENTRY_COUNT || EntriesNeeded == 0)
@@ -189,11 +177,7 @@ static VOID PataFreePrdt(PrdtEntry *Prdt) {
     }
 }
 
-/*
- * ============================================================================
- * LBA Register Setup
- * ============================================================================
- */
+/* ============================================================================ LBA Register Setup ============================================================================ */
 static VOID SetupLba28Regs(UINT16 Base, UINT16 Ctrl, UINT32 Lba, UINT8 Count, UINT8 Drive) {
     SelectDeviceAndDelay(Base, Ctrl, Drive, 1, (UINT8)((Lba >> 24) & 0x0F));
     Outb(Base + PATA_NSECT, Count);
@@ -216,11 +200,7 @@ static VOID SetupLba48Regs(UINT16 Base, UINT16 Ctrl, UINT64 Lba, UINT16 Count, U
     Outb(Base + PATA_HCYL, (UINT8)((Lba >> 16) & 0xFF));
 }
 
-/*
- * ============================================================================
- * PIO Fallback (improved with error checking)
- * ============================================================================
- */
+/* ============================================================================ PIO Fallback (improved with error checking) ============================================================================ */
 static INT PataPioReadSectors(PataDrive *Drive, UINT64 Lba, UINT32 Count, VOID *Buffer) {
     if (!Drive || !Buffer || Count == 0)
         RETURN(DEVICE_INVALID);
@@ -325,11 +305,7 @@ static INT PataPioWriteSectors(PataDrive *Drive, UINT64 Lba, UINT32 Count, const
     RETURN(SUCCESS);
 }
 
-/*
- * ============================================================================
- * Improved DMA Operations
- * ============================================================================
- */
+/* ============================================================================ Improved DMA Operations ============================================================================ */
 static INT PataDmaTransfer(PataDrive *Drive, PataRequest *Req) {
     if (!Drive || !Req || !Drive->BusMasterBase || Req->Count == 0)
         RETURN(DEVICE_INVALID);
@@ -408,11 +384,7 @@ static INT PataDmaTransfer(PataDrive *Drive, PataRequest *Req) {
     RETURN(TIMEOUT);
 }
 
-/*
- * ============================================================================
- * Request Queue Management (improved)
- * ============================================================================
- */
+/* ============================================================================ Request Queue Management (improved) ============================================================================ */
 static VOID PataQueueRequest(PataDrive *Drive, PataRequest *Req) {
     SpinLock *Lock;
     PataRequest **Queue;
@@ -467,11 +439,7 @@ static PataRequest* PataDequeueRequest(PataDrive *Drive) {
     return Req;
 }
 
-/*
- * ============================================================================
- * IRQ Completion (improved with memory cleanup)
- * ============================================================================
- */
+/* ============================================================================ IRQ Completion (improved with memory cleanup) ============================================================================ */
 static VOID PataCompleteIrqRequest(PataDrive *Drive) {
     if (!Drive)
         return;
@@ -528,11 +496,7 @@ static VOID PataCompleteIrqRequest(PataDrive *Drive) {
     return;
 }
 
-/*
- * ============================================================================
- * IRQ Handlers
- * ============================================================================
- */
+/* ============================================================================ IRQ Handlers ============================================================================ */
 VOID PataPrimaryIrqHandler(VOID) {
     if (PrimaryIrqDrive) {
         UINT8 Status = Inb(PATA_BASE_PRIMARY + PATA_STATUS);
@@ -559,11 +523,7 @@ VOID PataSecondaryIrqHandler(VOID) {
     ApicEoi();
 }
 
-/*
- * ============================================================================
- * Public API - Async I/O (improved)
- * ============================================================================
- */
+/* ============================================================================ Public API - Async I/O (improved) ============================================================================ */
 INT PataReadSectorsAsync(PataDrive *Drive, UINT64 Lba, UINT32 Count, 
                          VOID *Buffer, PataRequest *Req) {
     if (!Drive || !Buffer || !Req || Count == 0)
@@ -632,11 +592,7 @@ INT PataWriteSectorsAsync(PataDrive *Drive, UINT64 Lba, UINT32 Count,
     RETURN(SUCCESS);  // Async
 }
 
-/*
- * ============================================================================
- * Improved Wait and Cancel functions
- * ============================================================================
- */
+/* ============================================================================ Improved Wait and Cancel functions ============================================================================ */
 INT PataWaitRequest(PataRequest *Req, UINT32 TimeoutMs) {
     if (!Req)
         RETURN(DEVICE_INVALID);
@@ -687,11 +643,7 @@ BOOL PataIsRequestComplete(PataRequest *Req) {
     return Req ? Req->Completed : TRUE;
 }
 
-/*
- * ============================================================================
- * Synchronous API (improved)
- * ============================================================================
- */
+/* ============================================================================ Synchronous API (improved) ============================================================================ */
 INT PataReadSectors(PataDrive *Drive, UINT64 Lba, UINT32 Count, VOID *Buffer) {
     PataRequest Req;
     INT Result = PataReadSectorsAsync(Drive, Lba, Count, Buffer, &Req);
@@ -710,11 +662,7 @@ INT PataWriteSectors(PataDrive *Drive, UINT64 Lba, UINT32 Count, const VOID *Buf
     return PataWaitRequest(&Req, PATA_DMA_TIMEOUT_MS);
 }
 
-/*
- * ============================================================================
- * Flush Cache
- * ============================================================================
- */
+/* ============================================================================ Flush Cache ============================================================================ */
 INT PataFlushCache(PataDrive *Drive) {
     if (!Drive)
         return -DEVICE_INVALID;
@@ -734,11 +682,7 @@ INT PataFlushCache(PataDrive *Drive) {
     return CheckErrAndClear(Drive->BasePort);
 }
 
-/*
- * ============================================================================
- * IDENTIFY (improved)
- * ============================================================================
- */
+/* ============================================================================ IDENTIFY (improved) ============================================================================ */
 INT PataIdentify(PataDrive *Drive, UINT16 IdentBuffer[256]) {
     if (!Drive || !IdentBuffer)
         RETURN(DEVICE_INVALID);
@@ -816,11 +760,7 @@ INT PataIdentify(PataDrive *Drive, UINT16 IdentBuffer[256]) {
     RETURN(SUCCESS);
 }
 
-/*
- * ============================================================================
- * Initialization (improved)
- * ============================================================================
- */
+/* ============================================================================ Initialization (improved) ============================================================================ */
 static INT PataDetectDMA(PataDrive *Drive, PciDevice *PciPata) {
     if (!PciPata || PciPata->BarSizes[4] == 0)
         RETURN(NO_OBJECT);
@@ -861,7 +801,7 @@ static INT PataReadWrapper(Disk *Disk, UINT64 Lba, UINT32 Count, VOID *Buffer) {
     return PataReadSectors(Drive, Lba, Count, Buffer);
 }
 
-// Запись через DiskMgr
+// Recording via DiskMgr
 static INT PataWriteWrapper(Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buffer) {
     if (!Disk || !Disk->DriverData) return DEVICE_INVALID;
     
@@ -1004,11 +944,7 @@ INT PataInit(PataDrive *Drive, PataChannel Channel, UINT8 DriveNum) {
     RETURN(SUCCESS);
 }
 
-/*
- * ============================================================================
- * Utility Functions
- * ============================================================================
- */
+/* ============================================================================ Utility Functions ============================================================================ */
 UINT8 PataGetIrqCount(PataDrive *Drive) {
     return Drive ? Drive->IrqCount : 0;
 }

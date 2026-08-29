@@ -54,7 +54,7 @@ typedef long long INTN;
 typedef unsigned long USIZE;
 
 typedef INTPTR PTRDIFF;
-typedef INT WCHAR;
+typedef UINT16 WCHAR;
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))

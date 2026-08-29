@@ -1,10 +1,10 @@
-#include <Mem/Paging.h>
 #include <Mem/PhysAlloc.h>
-#include <Lib/String.h>
-#include <Return.h>
 #include <CpuFeatures.h>
+#include <Mem/Paging.h>
+#include <Lib/String.h>
 #include <Asm/Cpu.h>
 #include <Basecon.h>
+#include <Return.h>
 
 // ============================================================================
 // Paging status

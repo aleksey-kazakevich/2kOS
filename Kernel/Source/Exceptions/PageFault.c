@@ -1,13 +1,13 @@
-#include <Types.h>
-#include <Asm/Cpu.h>
 #include <ExceptionHelper.h>
-#include <Interrupt.h>
-#include <Mem/Paging.h>
 #include <Mem/Allocator.h>
 #include <Mem/PhysAlloc.h>
-#include <Scheduler.h>
-#include <Basecon.h>
+#include <Mem/Paging.h>
 #include <Lib/String.h>
+#include <Interrupt.h>
+#include <Scheduler.h>
+#include <Asm/Cpu.h>
+#include <Basecon.h>
+#include <Types.h>
 
 static inline UINT64 GetPageFaultAddress(VOID) {
     UINT64 Addr;

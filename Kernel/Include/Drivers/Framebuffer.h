@@ -90,6 +90,15 @@ VOID FramebufferClearLayer(INT Layer, FramebufferColor Color);
 VOID FramebufferFillRect(INT32 X, INT32 Y, UINT32 W, UINT32 H, FramebufferColor Color);
 VOID FramebufferFillRectLayer(INT Layer, INT32 X, INT32 Y, UINT32 W, UINT32 H, FramebufferColor Color);
 VOID FramebufferDrawRect(INT32 X, INT32 Y, UINT32 W, UINT32 H, FramebufferColor Color);
+VOID FramebufferDrawBitmap(const VOID *BitmapData, 
+                           UINT32 Width, UINT32 Height,
+                           INT32 X, INT32 Y,
+                           UINT32 Scale);  // Scale = 1 for 1:1, 2 for double size, etc.
+VOID FramebufferDrawBitmapTransparent(const VOID *BitmapData,
+                                      UINT32 Width, UINT32 Height,
+                                      INT32 X, INT32 Y,
+                                      UINT32 Scale,
+                                      UINT16 TransparentColor);
 
 // --- Layer management ---
 INT FramebufferCreateLayer(INT LayerIndex);

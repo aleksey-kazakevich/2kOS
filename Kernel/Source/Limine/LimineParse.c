@@ -49,7 +49,7 @@ UINT64 LimineGetHHDMOffset(VOID) {
     return Resp->offset;
 }
 
-/* === Executable Address (formerly Kernel Address) ===*/
+/* === Executable Address (formerly Kernel Address) === */
 
 BOOL LimineKernelAddressAvailable(VOID) {
     return LimineIsAvailable(kernel_addr_req.response);
@@ -188,4 +188,17 @@ UINT64 LimineGetRsdp(VOID) {
     struct limine_rsdp_response *Resp = 
         (struct limine_rsdp_response *)rsdp_req.response;
     return (UINT64)(UINTPTR)Resp->address;
+}
+
+BOOL LimineCmdLineAvailable(VOID) {
+    return cmdline_req.response != NULLPTR;
+}
+
+const CHAR* LimineGetCmdLine(VOID) {
+    if (!LimineCmdLineAvailable()) {
+        return "";
+    }
+    struct limine_executable_cmdline_response *Resp = 
+        (struct limine_executable_cmdline_response *)cmdline_req.response;
+    return Resp->cmdline ? Resp->cmdline : "";
 }

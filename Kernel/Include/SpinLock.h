@@ -1,7 +1,7 @@
 #pragma once
 
-#include <Types.h>
 #include <Asm/Cpu.h>
+#include <Types.h>
 
 typedef struct {
     volatile UINT32 Locked;

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <Types.h>
 #include <Lib/String.h>
+#include <Types.h>
 
 #define HEAP_CANARY_MAGIC 0xDEADBEEF
 
@@ -12,9 +12,7 @@ typedef struct {
     BOOL Initialized;
 } HeapCanary;
 
-/*
- * Memory allocator statistics structure
- */
+/* Memory allocator statistics structure */
 typedef struct {
     USIZE TotalManaged;   // Total bytes managed (payload + headers)
     USIZE UsedPayload;    // Bytes currently used by allocations

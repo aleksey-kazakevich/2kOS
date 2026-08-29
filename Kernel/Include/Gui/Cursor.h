@@ -1,8 +1,8 @@
 #pragma once
 
-#include <Types.h>
-#include <Drivers/Framebuffer.h>
 #include <Drivers/Ps2/Ps2Mouse.h>
+#include <Drivers/Framebuffer.h>
+#include <Types.h>
 
 // ============================================================================
 // CURSOR FUNCTIONS

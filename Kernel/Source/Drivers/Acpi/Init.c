@@ -1,12 +1,13 @@
-#include <Types.h>
-#include <Basecon.h>
-#include <Drivers/Acpi/Acpi.h>
-#include <Drivers/Apic/Apic.h>
-#include <Drivers/Apic/Ioapic.h>
+#include <Drivers/Irq/Apic/Ioapic.h>
+#include <Drivers/Irq/Apic/Apic.h>
 #include <Limine/LimineParse.h>
+#include <Drivers/Acpi/Acpi.h>
+#include <Drivers/Acpi/Sci.h>
 #include <Lib/String.h>
+#include <Basecon.h>
 #include <Return.h>
 #include <Asm/Io.h>
+#include <Types.h>
 
 static UINT64 FindRsdp(VOID) {
     UINT64 RsdpAddr = 0;
@@ -226,6 +227,8 @@ INT InitAcpiAndApic(VOID) {
     
     // Masking all IRQs
     IoapicMaskAll();
+
+    AcpiSciInit();
     
     RETURN(SUCCESS);
 }

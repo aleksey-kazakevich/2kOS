@@ -2,16 +2,12 @@
 
 #include <Types.h>
 
-/*
- * ACPI signatures
- */
+/* ACPI signatures */
 #define ACPI_RSDP_SIGNATURE      "RSD PTR "
 #define ACPI_RSDP_V1_SIZE        20
 #define ACPI_RSDP_V2_SIZE        36
 
-/*
- * MADT entry types
- */
+/* MADT entry types */
 #define MADT_TYPE_LOCAL_APIC              0
 #define MADT_TYPE_IO_APIC                  1
 #define MADT_TYPE_INT_SOURCE_OVERRIDE       2
@@ -24,9 +20,7 @@
 #define MADT_TYPE_PROCESSOR_LOCAL_X2APIC    9
 #define MADT_TYPE_LOCAL_X2APIC_NMI          10
 
-/*
- * ACPI System Descriptor Table Header
- */
+/* ACPI System Descriptor Table Header */
 typedef struct {
     CHAR     Signature[4];
     UINT32   Length;
@@ -39,9 +33,7 @@ typedef struct {
     UINT32   CreatorRevision;
 } ATTRIBUTE(packed) SDTHeader;
 
-/*
- * RSDP (v1 and v2)
- */
+/* RSDP (v1 and v2) */
 typedef struct {
     CHAR     Signature[8];
     UINT8    Checksum;
@@ -58,25 +50,19 @@ typedef struct {
     UINT8    Reserved[3];
 } ATTRIBUTE(packed) RSDPV2;
 
-/*
- * RSDT (Root System Description Table)
- */
+/* RSDT (Root System Description Table) */
 typedef struct {
     SDTHeader Header;
     UINT32    Entries[];
 } ATTRIBUTE(packed) RSDT;
 
-/*
- * XSDT (Extended System Description Table)
- */
+/* XSDT (Extended System Description Table) */
 typedef struct {
     SDTHeader Header;
     UINT64    Entries[];
 } ATTRIBUTE(packed) XSDT;
 
-/*
- * FADT (Fixed ACPI Description Table)
- */
+/* FADT (Fixed ACPI Description Table) */
 typedef struct {
     SDTHeader Header;
     UINT32    FirmwareCtrl;
@@ -138,26 +124,20 @@ typedef struct {
     UINT32    HpetFreq;          // HPET frequency (if present)
 } ATTRIBUTE(packed) FADT;
 
-/*
- * MADT (Multiple APIC Description Table)
- */
+/* MADT (Multiple APIC Description Table) */
 typedef struct {
     SDTHeader Header;
     UINT32    LocalApicAddress;
     UINT32    Flags;
 } ATTRIBUTE(packed) MADT;
 
-/*
- * MADT Entry Header
- */
+/* MADT Entry Header */
 typedef struct {
     UINT8 Type;
     UINT8 Length;
 } ATTRIBUTE(packed) MADTEntryHeader;
 
-/*
- * MADT Local APIC Entry
- */
+/* MADT Local APIC Entry */
 typedef struct {
     MADTEntryHeader Header;
     UINT8  AcpiProcessorId;
@@ -165,9 +145,7 @@ typedef struct {
     UINT32 Flags;
 } ATTRIBUTE(packed) MADTLocalApic;
 
-/*
- * MADT Processor Local x2APIC Entry (ACPI 4.0+)
- */
+/* MADT Processor Local x2APIC Entry (ACPI 4.0+) */
 typedef struct {
     MADTEntryHeader Header;
     UINT16 Reserved;
@@ -176,9 +154,7 @@ typedef struct {
     UINT32 AcpiProcessorUid;
 } ATTRIBUTE(packed) MADTLocalX2Apic;
 
-/*
- * MADT IO APIC Entry
- */
+/* MADT IO APIC Entry */
 typedef struct {
     MADTEntryHeader Header;
     UINT8  IoApicId;
@@ -187,9 +163,7 @@ typedef struct {
     UINT32 GlobalSystemInterruptBase;
 } ATTRIBUTE(packed) MADTIoApic;
 
-/*
- * MADT Interrupt Source Override
- */
+/* MADT Interrupt Source Override */
 typedef struct {
     MADTEntryHeader Header;
     UINT8  Bus;
@@ -198,9 +172,7 @@ typedef struct {
     UINT16 Flags;
 } ATTRIBUTE(packed) MADTIntSourceOverride;
 
-/*
- * HPET (High Precision Event Timer)
- */
+/* HPET (High Precision Event Timer) */
 typedef struct {
     SDTHeader Header;
     UINT8     HardwareRevId;
@@ -228,9 +200,7 @@ typedef struct {
 #define HPET_CONFIG_ENABLE          (1ULL << 0)
 #define HPET_CONFIG_LEGACY          (1ULL << 1)
 
-/*
- * MCFG (PCI Express Memory Mapped Configuration)
- */
+/* MCFG (PCI Express Memory Mapped Configuration) */
 typedef struct {
     SDTHeader Header;
     UINT64    Reserved;

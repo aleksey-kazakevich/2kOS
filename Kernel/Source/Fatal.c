@@ -1,6 +1,6 @@
-#include <Fatal.h>
 #include <Basecon.h>
 #include <Asm/Cpu.h>
+#include <Fatal.h>
 #include <Rgb.h>
 
 #define MAX_FRAMES 32

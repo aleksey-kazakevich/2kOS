@@ -1,14 +1,17 @@
 #include <Drivers/Disk/DiskMgr.h>
+#include <Drivers/Disk/Pata.h>
+#include <Drivers/Disk/Sata.h>
+#include <Mem/Allocator.h>
 #include <Lib/String.h>
 #include <Lib/StdIo.h>
-#include <Mem/Allocator.h>
-#include <Return.h>
 #include <Basecon.h>
-#include <Drivers/Disk/Pata.h>
+#include <Return.h>
 
 static ListHead GDiskList;
 static UINT32 GDiskCount = 0;
 static BOOL GInitialized = FALSE;
+
+extern VOID SataRegisterDisk(SataPort *Port, INT PortNum);
 
 const CHAR* DiskTypeToString(DiskType Type) {
     switch (Type) {
@@ -444,7 +447,7 @@ INT PartitionCreateMBR(Disk *Disk, UINT64 StartLba, UINT64 SectorCount, UINT8 Pa
     Result = Disk->Write(Disk, 0, 1, MBR);
     if (Result != SUCCESS) RETURN(Result);
     
-    // Пересканируем
+    // Let's rescan
     PartitionScanMBR(Disk);
     
     BaseconPrintf(BASECON_TYPE_NORMAL, "diskmgr: partition created on %s\n", Disk->Name);
@@ -523,6 +526,26 @@ INT DiskMgrRegisterDisk(Disk *Disk) {
 
 extern PataDrive PataDrives[4];
 
+INT DiskMgrInitSata(VOID) {
+    INT Result = SataInit();
+    if (Result != SUCCESS) {
+        BaseconPrintf(BASECON_TYPE_NORMAL, "diskmgr: SATA init failed (error %d)\n", Result);
+        return Result;
+    }
+
+    INT Registered = 0;
+    for (INT I = 0; I < 32; I++) {
+        SataPort *Port = SataGetPort(I);
+        if (Port && Port->Status == SATA_PORT_ACTIVE && Port->TotalSectors > 0) {
+            SataRegisterDisk(Port, I);
+            Registered++;
+        }
+    }
+    
+    BaseconPrintf(BASECON_TYPE_NORMAL, "diskmgr: %d SATA disks found\n", Registered);
+    return SUCCESS;
+}
+
 VOID DiskMgrInitDisks(VOID) {
     if (!GInitialized) {
         DiskMgrInit();
@@ -545,5 +568,7 @@ VOID DiskMgrInitDisks(VOID) {
     }
     
     BaseconPrintf(BASECON_TYPE_NORMAL, "diskmgr: %d PATA/IDE disks found\n", PataFoundCount);
+
+    DiskMgrInitSata();
 }
 

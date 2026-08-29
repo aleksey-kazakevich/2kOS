@@ -42,3 +42,10 @@ struct limine_rsdp_request rsdp_req = {
     .revision = 0,
     .response = NULLPTR
 };
+
+__attribute__((section(".limine_reqs"), used))
+struct limine_executable_cmdline_request cmdline_req = {
+    .id = LIMINE_EXECUTABLE_CMDLINE_REQUEST_ID,
+    .revision = 0,
+    .response = NULLPTR
+};

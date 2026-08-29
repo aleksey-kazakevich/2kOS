@@ -1,15 +1,15 @@
+#include <Drivers/Irq/Apic/Ioapic.h>
+#include <Drivers/Irq/Apic/Apic.h>
 #include <Drivers/Ps2/Ps2Mouse.h>
 #include <Drivers/Ps2/Ps2.h>
-#include <Asm/Io.h>
-#include <Asm/Cpu.h>
-#include <KDriver.h>
-#include <Return.h>
-#include <Idt.h>
-#include <Drivers/Apic/Apic.h>
-#include <Drivers/Apic/Ioapic.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
+#include <Asm/Cpu.h>
+#include <KDriver.h>
 #include <Basecon.h>
+#include <Asm/Io.h>
+#include <Return.h>
+#include <Idt.h>
 
 // ============================================================================
 // Configuration
@@ -447,7 +447,7 @@ static VOID Ps2MouseHandleByte(UINT8 Byte) {
                     // TODO: reinitialization
                     return;
                 }
-                // Не 0xAA 0x00 — обрабатываем первый байт как обычный
+                // Not 0xAA 0x00 - process the first byte as usual
                 GMouse.PacketIndex = 0;
                 GMouse.BadByte = GMouse.Packet[0];
             }

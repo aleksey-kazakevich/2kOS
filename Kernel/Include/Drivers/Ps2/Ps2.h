@@ -42,13 +42,13 @@
 // Controller Configuration (Configuration Byte)
 // ============================================================================
 // Bit 0: Port 1 Interrupt Enable (1 = enabled)
-// Бит 1: Port 2 Interrupt Enable (1 = enabled)
-// Бит 2: System Flag (1 = system passed POST)
-// Бит 3: Port 1 Clock Override (1 = disabled)
+// Bit 1: Port 2 Interrupt Enable (1 = enabled)
+// Bit 2: System Flag (1 = system passed POST)
+// Bit 3: Port 1 Clock Override (1 = disabled)
 // Bit 4: Port 1 Disable (1 = disabled)
 // Bit 5: Port 2 Disable (1 = disabled)
-// Бит 6: Port 1 Translation (1 = enabled, AT->XT)
-// Бит 7: Reserved (must be 0)
+// Bit 6: Port 1 Translation (1 = enabled, AT->XT)
+// Bit 7: Reserved (must be 0)
 
 #define PS2_CONFIG_PORT1_INT     (1 << 0)
 #define PS2_CONFIG_PORT2_INT     (1 << 1)

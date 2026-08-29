@@ -25,6 +25,10 @@ VOID InitStackProtector(VOID) {
     WriteMSR(IA32_KERNEL_GS_BASE, (UINT64)&KernelTLS);
 }
 
+VOID InitCmds(VOID) {
+    CmdEchoRegister();
+}
+
 VOID KMain(VOID) {
     InitStackProtector();
     TssInit();
@@ -37,14 +41,20 @@ VOID KMain(VOID) {
         BaseconInit(FB);
 	BaseconSetColors(RGB_GRAY, RGB_BLACK);
         BaseconClear();
-        BaseconPrintf(BASECON_TYPE_SUCCESS, "basecon initialized\n");
-    
+        BaseconSetEnabled(TRUE);
+
+    CmdLineInit();
+    CmdLineSet(LimineGetCmdLine());
+    InitCmds();    
+
     BOOL LoadedInUefi = IsUefi();
     BaseconPrintf(BASECON_TYPE_INFO, "booted via limine:%s\n", LoadedInUefi ? "uefi" : "bios");
 
     InitIdt();
     
     if (InitAcpiAndApic() != SUCCESS) Fatal("failed to initialize apic and acpi");
+
+    ComInitAll();
 
     PciInit();
     
@@ -63,6 +73,10 @@ VOID KMain(VOID) {
     Ps2KeyboardInit();
     Ps2MouseInit();
     MouseCursorInit();
+
+    CmdInit();
+    BaseconSetInputCallback(CmdBaseconHandler, NULLPTR);
+    InitCmds();
 
     BaseconSetPrompt("$> ");
     BaseconInputStart();

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <Types.h>
 #include <Interrupt.h>
+#include <Types.h>
 
 VOID FatalImpl(const CHAR *Message, const CHAR *File, INT Line, const CHAR *Func, UINTPTR CallerRip);
 VOID FatalWithFrame(const CHAR *Message, InterruptFrame *Frame, const CHAR *File, INT Line, const CHAR *Func);

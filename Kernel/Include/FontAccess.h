@@ -2,9 +2,7 @@
 
 #include <Types.h>
 
-#include <Lib/Font/English.h>
-#include <Lib/Font/Numbers.h>
-#include <Lib/Font/Symbols.h>
+#include <Lib/Font/Vga.h>
 
 // ========== Quick access tables ==========
 static const UINT8 (*FontUppercase[26])[16] = {

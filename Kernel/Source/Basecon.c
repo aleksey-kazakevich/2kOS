@@ -1,15 +1,15 @@
-#include <Basecon.h>
+#include <Drivers/Ps2/Ps2Keyboard.h>
+#include <Mem/Allocator.h>
 #include <Lib/String.h>
 #include <Lib/StdArg.h>
+#include <FontAccess.h>
 #include <Lib/StdIo.h>
-#include <Mem/Allocator.h>
-#include <Drivers/Ps2/Ps2Keyboard.h>
+#include <Scheduler.h>
+#include <Basecon.h>
 #include <Return.h>
 #include <Rgb.h>
-#include <FontAccess.h>
-#include <Scheduler.h>
 
-static BOOL BaseconEnabled = TRUE;
+static BOOL BaseconEnabled = FALSE;
 static Basecon GBasecon = {0};
 
 static BaseconInputCallback GInputCallback = NULLPTR;

@@ -38,11 +38,11 @@ typedef struct Partition {
     UINT32 SectorSize;
     UINT64 SizeInBytes;
     
-    // --- Тип ---
+    // --- Type ---
     UINT8 PartitionId;          // 0x07=NTFS, 0x0B=FAT32, 0x83=Linux
     PartitionType Type;
     
-    // --- Флаги ---
+    // --- Flags ---
     BOOL Bootable;
     BOOL Mounted;
     
@@ -93,7 +93,7 @@ INT DiskMgrRegisterDisk(Disk *Disk);
 Disk* DiskMgrFindDisk(const CHAR *Name);
 Partition* DiskMgrFindPartition(const CHAR *Name);
 
-// --- Список дисков ---
+// --- Disk list ---
 UINT32 DiskMgrGetDiskCount(VOID);
 Disk* DiskMgrGetDisk(UINT32 Index);
 Disk* DiskMgrGetFirst(VOID);

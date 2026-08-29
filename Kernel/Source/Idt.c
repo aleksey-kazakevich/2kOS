@@ -1,10 +1,10 @@
-#include <Idt.h>
-#include <Asm/Io.h>
-#include <Asm/Cpu.h>
+#include <Drivers/Irq/Apic/Apic.h>
 #include <InterruptList.h>
-#include <Drivers/Apic/Apic.h>
-#include <Types.h>
+#include <Asm/Cpu.h>
 #include <Basecon.h>
+#include <Asm/Io.h>
+#include <Types.h>
+#include <Idt.h>
 
 #define IA32_EFER          0xC0000080
 #define IA32_STAR          0xC0000081

@@ -108,6 +108,7 @@
 #define PS2_SET1_KP_3           0x51
 #define PS2_SET1_KP_0           0x52
 #define PS2_SET1_KP_PERIOD      0x53
+#define PS2_SET1_DELETE         0x53
 #define PS2_SET1_F11            0x57
 #define PS2_SET1_F12            0x58
 

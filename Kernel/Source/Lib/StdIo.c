@@ -1,7 +1,7 @@
-#include <Types.h>
 #include <Lib/StdArg.h>
-#include <Lib/StdIo.h>
 #include <Lib/String.h>
+#include <Lib/StdIo.h>
+#include <Types.h>
 
 typedef struct {
     CHAR *Str;

@@ -1,7 +1,7 @@
+#include <Drivers/Hpet.h>
 #include <Time/Timer.h>
 #include <Asm/Cpu.h>
 #include <Asm/Io.h>
-#include <Drivers/Hpet.h>
 
 static UINT64 TscPerMs = 0;
 static UINT64 TscKhz = 0;

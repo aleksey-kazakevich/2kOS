@@ -1,7 +1,7 @@
-#include <Types.h>
+#include <Drivers/Framebuffer.h>
 #include <Limine/LimineParse.h>
 #include <Limine/limine.h>
-#include <Drivers/Framebuffer.h>
+#include <Types.h>
 
 VOID InitFramebuffer(VOID) {
     if (!LimineFramebufferAvailable()) {

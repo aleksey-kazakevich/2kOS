@@ -1,8 +1,8 @@
 #pragma once
 
-#include <Types.h>
 #include <Drivers/Ps2/Ps2.h>
 #include <KDriver.h>
+#include <Types.h>
 
 // ============================================================================
 // Mouse types
@@ -60,7 +60,7 @@ typedef struct {
 } MouseEvent;
 
 // ============================================================================
-// Callback для мыши
+// Callback for mouse
 // ============================================================================
 
 typedef VOID (*MouseCallback)(MouseEvent *Event, VOID *UserData);

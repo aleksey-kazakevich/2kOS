@@ -1,13 +1,13 @@
-#include <Drivers/Hpet.h>
-#include <Drivers/Acpi/Acpi.h>
+#include <Drivers/Irq/Apic/ApicRegs.h>
 #include <Drivers/Acpi/AcpiTables.h>
-#include <Drivers/Apic/Apic.h>
-#include <Drivers/Apic/ApicRegs.h>
+#include <Drivers/Irq/Apic/Apic.h>
+#include <Drivers/Acpi/Acpi.h>
+#include <Drivers/Hpet.h>
+#include <Lib/String.h>
 #include <Asm/Mmio.h>
 #include <Asm/Cpu.h>
 #include <KDriver.h>
 #include <Return.h>
-#include <Lib/String.h>
 
 #define HPET_FS_PER_SEC         1000000000000000ULL
 #define APIC_TIMER_DIVISOR      16

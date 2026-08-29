@@ -1,14 +1,12 @@
+#include <Limine/LimineParse.h>
 #include <Mem/Allocator.h>
 #include <Mem/PhysAlloc.h>
 #include <Mem/Paging.h>
-#include <Types.h>
 #include <Lib/String.h>
 #include <Return.h>
-#include <Limine/LimineParse.h>
+#include <Types.h>
 
-/*
- * Configuration
- */
+/* Configuration */
 #define ALIGN 8
 #define MAGIC 0xB16B00B5U
 #ifndef SIZE_MAX
@@ -19,9 +17,7 @@
 static UINT64 GHeapCanary = 0;
 static BOOL GCanaryInitialized = FALSE;
 
-/*
- * Block header
- */
+/* Block header */
 typedef struct BlockHeader
 {
     UINT32 Magic;
@@ -34,9 +30,7 @@ typedef struct BlockHeader
 
 #define MIN_SPLIT_SIZE (sizeof(BlockHeader) + ALIGN)
 
-/*
- * Global
- */
+/* Global */
 static BlockHeader *HeapHead = NULLPTR;
 static BlockHeader *HeapTail = NULLPTR;
 static VOID *HeapStartVirt = NULLPTR;
@@ -107,9 +101,7 @@ static inline UINT64 HeapGetCanary(VOID) {
     return GHeapCanary;
 }
 
-/*
- * Expand heap using PhysAlloc
- */
+/* Expand heap using PhysAlloc */
 static INT HeapExpand(USIZE Bytes) {
     USIZE Need = AlignUp(Bytes + sizeof(BlockHeader));
     USIZE PagesNeeded = (Need + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -153,9 +145,7 @@ static INT HeapExpand(USIZE Bytes) {
     return 1;
 }
 
-/*
- * Initialize heap - allocate initial memory via PhysAlloc
- */
+/* Initialize heap - allocate initial memory via PhysAlloc */
 INT MemoryAllocatorInit(VOID) {
     // Allocate initial memory for the heap (16 MB)
     UINT32 PagesNeeded = (HEAP_INITIAL_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -184,9 +174,7 @@ INT MemoryAllocatorInit(VOID) {
     RETURN(SUCCESS);
 }
 
-/*
- * Find free block
- */
+/* Find free block */
 static BlockHeader *FindFit(USIZE Size) {
     BlockHeader *Cur = HeapHead;
     while (Cur) {
@@ -197,9 +185,7 @@ static BlockHeader *FindFit(USIZE Size) {
     return NULLPTR;
 }
 
-/*
- * Split block
- */
+/* Split block */
 static VOID SplitBlock(BlockHeader *H, USIZE ReqSize) {
     if (!H) return;
     if (H->Size < ReqSize + MIN_SPLIT_SIZE) return;
@@ -218,9 +204,7 @@ static VOID SplitBlock(BlockHeader *H, USIZE ReqSize) {
     if (HeapTail == H) HeapTail = NewH;
 }
 
-/*
- * Coalesce adjacent free blocks
- */
+/* Coalesce adjacent free blocks */
 static VOID Coalesce(BlockHeader *H) {
     if (!H) return;
     
@@ -241,9 +225,7 @@ static VOID Coalesce(BlockHeader *H) {
     }
 }
 
-/*
- * malloc
- */
+/* malloc */
 VOID *MemoryAllocate(USIZE Size) {
     if (Size == 0) return NULLPTR;
     Size = AlignUp(Size);
@@ -263,9 +245,7 @@ VOID *MemoryAllocate(USIZE Size) {
     return HeaderToPayload(Fit);
 }
 
-/*
- * free
- */
+/* free */
 VOID MemoryFree(VOID *Ptr) {
     if (!Ptr) return;
     
@@ -289,9 +269,7 @@ VOID MemoryFree(VOID *Ptr) {
     Coalesce(H);
 }
 
-/*
- * realloc
- */
+/* realloc */
 VOID *MemoryReallocate(VOID *Ptr, USIZE NewSize) {
     if (!Ptr) return MemoryAllocate(NewSize);
     if (NewSize == 0) {
@@ -319,9 +297,7 @@ VOID *MemoryReallocate(VOID *Ptr, USIZE NewSize) {
     return NewP;
 }
 
-/*
- * calloc
- */
+/* calloc */
 VOID *MemoryCallocate(USIZE NMemB, USIZE Size) {
     if (NMemB != 0 && Size > SIZE_MAX / NMemB) {
         return NULLPTR;
@@ -337,9 +313,7 @@ VOID *MemoryCallocate(USIZE NMemB, USIZE Size) {
     return Ptr;
 }
 
-/*
- * Statistics
- */
+/* Statistics */
 VOID GetKMemoryStats(KMemoryStats *Stats) {
     if (!Stats) return;
     
@@ -367,9 +341,7 @@ VOID GetKMemoryStats(KMemoryStats *Stats) {
     }
 }
 
-/*
- * Aligned allocation
- */
+/* Aligned allocation */
 VOID *MemoryAllocateAligned(USIZE Size, USIZE Alignment) {
     if (Alignment < ALIGN) Alignment = ALIGN;
     if ((Alignment & (Alignment - 1)) != 0) return NULLPTR;
@@ -401,16 +373,12 @@ VOID MemoryFreeAligned(VOID *Ptr) {
     MemoryFree(OriginalPtr);
 }
 
-/*
- * Get current heap size
- */
+/* Get current heap size */
 USIZE MemoryGetHeapSize(VOID) {
     return HeapCurrentSize;
 }
 
-/*
- * Get the virtual address of the beginning of the heap
- */
+/* Get the virtual address of the beginning of the heap */
 VOID* MemoryGetHeapStart(VOID) {
     return HeapStartVirt;
 }

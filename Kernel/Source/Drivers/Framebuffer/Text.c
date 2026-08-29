@@ -1,7 +1,7 @@
 #include <Drivers/Framebuffer.h>
-#include "Private.h"
 #include <FontAccess.h>
 #include <Lib/String.h>
+#include "Private.h"
 
 //=============================================================================
 // Text rendering

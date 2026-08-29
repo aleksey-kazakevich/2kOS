@@ -1,16 +1,12 @@
 #include <CpuFeatures.h>
-#include <Return.h>
 #include <Asm/Cpu.h>
+#include <Return.h>
 
 #define CR4_SMEP    (1 << 20)
 #define CR4_SMAP    (1 << 21)
 #define CR4_UMIP    (1 << 5)  
 
-/*
- * ============================================================================
- * Helper functions for checking support via CPUID
- * ============================================================================
- */
+/* ============================================================================ Helper functions for checking support via CPUID ============================================================================ */
 
 static BOOL CpuHasSmep(VOID) {
     UINT32 Eax, Ebx, Ecx, Edx;
@@ -40,11 +36,7 @@ static BOOL CpuHasUmip(VOID) {
     return (Ecx & (1 << 2)) != 0;
 }
 
-/*
- * ============================================================================
- * Basic switching functions
- * ============================================================================
- */
+/* ============================================================================ Basic switching functions ============================================================================ */
 
 INT CpuEnableSmepSmap(VOID) {
     UINT64 Cr4 = ReadCr4();
@@ -82,20 +74,16 @@ INT CpuEnableUmip(VOID) {
     return SUCCESS;
 }
 
-/*
- * ============================================================================
- * Other functions (unchanged)
- * ============================================================================
- */
+/* ============================================================================ Other functions (unchanged) ============================================================================ */
 
 BOOL CpuHasAvx(VOID) {
     UINT32 Eax, Ebx, Ecx, Edx;
     Cpuid(1, &Eax, &Ebx, &Ecx, &Edx);
     
-    /* AVX bit 28 in ECX*/
+    /* AVX bit 28 in ECX */
     if (!(Ecx & (1 << 28))) return FALSE;
     
-    /* Проверка XSAVE (бит 27 в ECX) */
+    /* XSAVE check (bit 27 in ECX) */
     if (!(Ecx & (1 << 27))) return FALSE;
     
     return TRUE;
@@ -106,7 +94,7 @@ VOID CpuEnableXsave(VOID) {
     Cr4 |= (1 << 18);  /* CR4.OSXSAVE */
     WriteCr4(Cr4);
     
-    /* XGETBV: request XCR0*/
+    /* XGETBV: request XCR0 */
     UINT32 Eax, Edx;
     asm volatile("xgetbv" : "=a"(Eax), "=d"(Edx) : "c"(0));
     UINT64 Xcr0 = ((UINT64)Edx << 32) | Eax;

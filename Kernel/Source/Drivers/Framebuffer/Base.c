@@ -1,12 +1,12 @@
 #include <Drivers/Framebuffer.h>
-#include "Private.h"
-#include <KDriver.h>
 #include <Mem/Allocator.h>
 #include <Lib/String.h>
+#include <Mem/Paging.h>
+#include <Lib/Math.h>
+#include "Private.h"
+#include <KDriver.h>
 #include <Asm/Cpu.h>
 #include <Return.h>
-#include <Lib/Math.h>
-#include <Mem/Paging.h>
 
 // ============================================================================
 // Configuration
@@ -575,7 +575,7 @@ VOID FramebufferSwapBuffers(VOID) {
             if (CursorW == 0) CursorW = 16;
             if (CursorH == 0) CursorH = 16;
         
-            // Клиппинг
+            // Clipping
             if (CX < 0) { CursorW += CX; CX = 0; }
             if (CY < 0) { CursorH += CY; CY = 0; }
             if (CX + CursorW > Width) CursorW = Width - CX;
@@ -585,7 +585,7 @@ VOID FramebufferSwapBuffers(VOID) {
         
             // MAIN CHANGE: read from the layer with the Width step!
             for (UINT32 Y = 0; Y < CursorH; Y++) {
-                UINT32 SrcOffset = (CY + Y) * Width + CX;  // ← шаг Width!
+                UINT32 SrcOffset = (CY + Y) * Width + CX;  // ← step Width!
                 for (UINT32 X = 0; X < CursorW; X++) {
                     UINT32 Pixel = Cursor[SrcOffset + X];
                     if (Pixel != 0) {
@@ -691,8 +691,152 @@ Framebuffer* FramebufferGet(VOID) {
 
 VOID FramebufferDrawRect(INT32 X, INT32 Y, UINT32 W, UINT32 H, FramebufferColor Color) {
     if (W < 2 || H < 2) return;
-    FramebufferFillRect(X, Y, W, 1, Color);           // Верх
-    FramebufferFillRect(X, Y + H - 1, W, 1, Color);   // Низ
+    FramebufferFillRect(X, Y, W, 1, Color);           // Top
+    FramebufferFillRect(X, Y + H - 1, W, 1, Color);   // Bottom
     FramebufferFillRect(X, Y, 1, H, Color);           // Left
     FramebufferFillRect(X + W - 1, Y, 1, H, Color);   // Right
+}
+
+UINT32 Rgb565ToPixel(UINT16 Rgb565) {
+    // Extract 5-6-5 bits
+    UINT8 R = (UINT8)(((Rgb565 >> 11) & 0x1F) << 3);
+    UINT8 G = (UINT8)(((Rgb565 >> 5) & 0x3F) << 2);
+    UINT8 B = (UINT8)((Rgb565 & 0x1F) << 3);
+    
+    FramebufferColor Color = {R, G, B, 255};
+    return ColorToPixel(Color);
+}
+
+static VOID DrawBitmapToBuffer(VOID *Buffer, 
+                               UINT32 BufferWidth, UINT32 BufferHeight,
+                               UINT32 BufferPitch, UINT32 BytesPerPixel,
+                               const VOID *BitmapData,
+                               UINT32 BmpWidth, UINT32 BmpHeight,
+                               INT32 X, INT32 Y,
+                               UINT32 Scale,
+                               UINT16 TransparentColor,
+                               BOOL UseTransparency) {
+    
+    if (!Buffer || !BitmapData || BmpWidth == 0 || BmpHeight == 0)
+        return;
+    
+    if (Scale == 0) Scale = 1;
+    
+    const UINT16 *Src = (const UINT16*)BitmapData;
+    UINT32 DestWidth = BmpWidth * Scale;
+    UINT32 DestHeight = BmpHeight * Scale;
+    
+    // Clipping
+    if (X < 0) { DestWidth += X; X = 0; }
+    if (Y < 0) { DestHeight += Y; Y = 0; }
+    if ((UINT32)X + DestWidth > BufferWidth)
+        DestWidth = BufferWidth - X;
+    if ((UINT32)Y + DestHeight > BufferHeight)
+        DestHeight = BufferHeight - Y;
+    
+    if (DestWidth == 0 || DestHeight == 0)
+        return;
+    
+    UINT8 *DstBase = (UINT8*)Buffer;
+    UINT32 Pitch = BufferPitch;
+    UINT32 Bpp = BytesPerPixel;
+    
+    // Fast path: no scaling, no transparency
+    if (Scale == 1 && !UseTransparency) {
+        for (UINT32 Row = 0; Row < DestHeight; Row++) {
+            UINT8 *Dst = DstBase + (Y + Row) * Pitch + X * Bpp;
+            const UINT16 *SrcRow = Src + Row * BmpWidth;
+            
+            for (UINT32 Col = 0; Col < DestWidth; Col++) {
+                UINT32 Pixel = Rgb565ToPixel(SrcRow[Col]);
+                if (Bpp == 4) {
+                    *(UINT32*)Dst = Pixel;
+                } else if (Bpp == 3) {
+                    Dst[0] = Pixel & 0xFF;
+                    Dst[1] = (Pixel >> 8) & 0xFF;
+                    Dst[2] = (Pixel >> 16) & 0xFF;
+                } else if (Bpp == 2) {
+                    *(UINT16*)Dst = (UINT16)Pixel;
+                }
+                Dst += Bpp;
+            }
+        }
+        return;
+    }
+    
+    // Slow path: scaling or transparency
+    for (UINT32 Row = 0; Row < DestHeight; Row++) {
+        UINT8 *Dst = DstBase + (Y + Row) * Pitch + X * Bpp;
+        UINT32 SrcRow = Row / Scale;
+        UINT32 SrcColOffset = 0;
+        
+        for (UINT32 Col = 0; Col < DestWidth; Col++) {
+            UINT32 SrcCol = Col / Scale;
+            UINT16 Pixel565 = Src[SrcRow * BmpWidth + SrcCol];
+            
+            // Transparency check
+            if (UseTransparency && Pixel565 == TransparentColor) {
+                Dst += Bpp;
+                continue;
+            }
+            
+            UINT32 Pixel = Rgb565ToPixel(Pixel565);
+            
+            if (Bpp == 4) {
+                *(UINT32*)Dst = Pixel;
+            } else if (Bpp == 3) {
+                Dst[0] = Pixel & 0xFF;
+                Dst[1] = (Pixel >> 8) & 0xFF;
+                Dst[2] = (Pixel >> 16) & 0xFF;
+            } else if (Bpp == 2) {
+                *(UINT16*)Dst = (UINT16)Pixel;
+            }
+            Dst += Bpp;
+        }
+    }
+}
+
+VOID FramebufferDrawBitmapTransparentLayer(INT Layer,
+                                           const VOID *BitmapData,
+                                           UINT32 Width, UINT32 Height,
+                                           INT32 X, INT32 Y,
+                                           UINT32 Scale,
+                                           UINT16 TransparentColor) {
+    if (!GFramebuffer.Initialized) return;
+    if (Layer < 0 || Layer >= (INT)GFramebuffer.LayerCount) return;
+    if (!GFramebuffer.Layers[Layer].Enabled) return;
+    if (!BitmapData || Width == 0 || Height == 0) return;
+    
+    VOID *Buffer = GFramebuffer.Layers[Layer].Buffer;
+    if (!Buffer) return;
+    
+    DrawBitmapToBuffer(Buffer,
+                       GFramebuffer.Width,
+                       GFramebuffer.Height,
+                       GFramebuffer.Pitch,
+                       GFramebuffer.BytesPerPixel,
+                       BitmapData,
+                       Width, Height,
+                       X, Y,
+                       Scale,
+                       TransparentColor,
+                       TRUE);
+    
+    FramebufferSwapBuffers();
+}
+
+VOID FramebufferDrawBitmapTransparent(const VOID *BitmapData,
+                                      UINT32 Width, UINT32 Height,
+                                      INT32 X, INT32 Y,
+                                      UINT32 Scale,
+                                      UINT16 TransparentColor) {
+    FramebufferDrawBitmapTransparentLayer(0, BitmapData, Width, Height,
+                                          X, Y, Scale, TransparentColor);
+}
+
+VOID FramebufferDrawBitmap(const VOID *BitmapData,
+                           UINT32 Width, UINT32 Height,
+                           INT32 X, INT32 Y,
+                           UINT32 Scale) {
+    FramebufferDrawBitmapTransparent(BitmapData, Width, Height, X, Y, Scale, 0xFFFF);
 }

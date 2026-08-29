@@ -1,10 +1,10 @@
+#include <ExceptionHelper.h>
+#include <Interrupt.h>
+#include <Asm/Cpu.h>
+#include <Basecon.h>
 #include <Types.h>
 #include <Fatal.h>
-#include <Asm/Cpu.h>
-#include <Interrupt.h>
 #include <Fatal.h>
-#include <ExceptionHelper.h>
-#include <Basecon.h>
 
 // Mask for clearing DR6 status bits (Intel SDM Vol 3, 17.4.2)
 // Bits 0-3, 13-15 are reset to 0. Reserved bits remain 1.

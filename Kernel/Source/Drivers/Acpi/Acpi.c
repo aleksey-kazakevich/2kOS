@@ -1,11 +1,11 @@
 #include <Drivers/Acpi/Acpi.h>
+#include <Mem/Allocator.h>
 #include <Lib/String.h>
-#include <Asm/Io.h>
+#include <Mem/Paging.h>
 #include <Asm/Cpu.h>
 #include <KDriver.h>
+#include <Asm/Io.h>
 #include <Return.h>
-#include <Mem/Allocator.h>
-#include <Mem/Paging.h>
 
 // ============================================================================
 // Global State

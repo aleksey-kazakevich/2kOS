@@ -1,9 +1,9 @@
+#include <Limine/LimineParse.h>
 #include <Mem/PhysAlloc.h>
+#include <Limine/limine.h>
 #include <Mem/Paging.h>
 #include <Lib/String.h>
 #include <Types.h>
-#include <Limine/LimineParse.h>
-#include <Limine/limine.h>
 
 // Dynamic bitmap is now a pointer, not an array
 static PhysAlloc GPhysAllocator;
@@ -115,7 +115,7 @@ VOID PhysAllocInit(PhysAlloc *PhysAllocator) {
         return;
     }
     
-    // 7. Резервируем страницы для битмапа
+    // 7. Reserve pages for the bitmap
     UINT64 BitmapPages = (PhysAllocBitmapSize + PAGE_SIZE - 1) / PAGE_SIZE;
     UINT64 BitmapEnd = BitmapPhysAddr + (BitmapPages * PAGE_SIZE);
     
@@ -147,7 +147,7 @@ VOID PhysAllocInit(PhysAlloc *PhysAllocator) {
             End = End & ~(PAGE_SIZE - 1);
             
             for (UINT64 Addr = Start; Addr < End; Addr += PAGE_SIZE) {
-                // Пропускаем область битмапа
+                // Skip the bitmap area
                 if (Addr >= BitmapPhysAddr && Addr < BitmapEnd) {
                     continue;
                 }
@@ -223,7 +223,7 @@ VOID PhysAllocInit(PhysAlloc *PhysAllocator) {
 }
 
 // ============================================================================
-// Остальные функции (без изменений)
+// Other functions (unchanged)
 // ============================================================================
 
 VOID* PhysAllocAllocatePage(PhysAlloc *PhysAllocator) {

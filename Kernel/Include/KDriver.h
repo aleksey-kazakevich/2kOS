@@ -30,7 +30,4 @@ UINT32 KDriverGetCount(VOID);
 VOID* KDriverGetPrivate(KDriver *Driver, USIZE Size);
 KDriver* KDriverGetByIndex(UINT32 Index);
 
-/* If you're want to register driver by one line, use:
- *   KDriverRegister(KDriverGenerateStruct([YourName], [DCL], [Initialized], [Priv]));
- * Where replace [YourName] to your driver name, [DCL] to your DCL (UINT8) (0-2), [Initialized] to TRUE/FALSE, [Priv] to private data or NULLPTR
- */
+/* If you're want to register driver by one line, use: KDriverRegister(KDriverGenerateStruct([YourName], [DCL], [Initialized], [Priv])); Where replace [YourName] to your driver name, [DCL] to your DCL (UINT8) (0-2), [Initialized] to TRUE/FALSE, [Priv] to private data or NULLPTR */

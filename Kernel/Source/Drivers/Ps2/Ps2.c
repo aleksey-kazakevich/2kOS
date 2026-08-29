@@ -1,12 +1,12 @@
 #include <Drivers/Ps2/Ps2.h>
-#include <Asm/Io.h>
-#include <Asm/Cpu.h>
-#include <KDriver.h>
-#include <Return.h>
 #include <Lib/String.h>
-#include <Basecon.h>
 #include <Time/Timer.h>
 #include <Interrupt.h>
+#include <Asm/Cpu.h>
+#include <KDriver.h>
+#include <Basecon.h>
+#include <Asm/Io.h>
+#include <Return.h>
 
 // ============================================================================
 // Global data

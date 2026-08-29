@@ -1,15 +1,15 @@
 #include <Drivers/Ps2/Ps2Keyboard.h>
+#include <Drivers/Irq/Apic/Ioapic.h>
+#include <Drivers/Irq/Apic/Apic.h>
 #include <Drivers/Ps2/Ps2.h>
-#include <Asm/Io.h>
-#include <Asm/Cpu.h>
-#include <KDriver.h>
-#include <Return.h>
-#include <Idt.h>
-#include <Drivers/Apic/Apic.h>
-#include <Drivers/Apic/Ioapic.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
+#include <Asm/Cpu.h>
+#include <KDriver.h>
 #include <Basecon.h>
+#include <Asm/Io.h>
+#include <Return.h>
+#include <Idt.h>
 
 // ============================================================================
 // CONFIGURATION
@@ -419,7 +419,7 @@ static VOID ProcessKeyEvent(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers) {
 }
 
 // ============================================================================
-// SCAN BYTE PROCESSING (SET 1 через аппаратную трансляцию)
+// SCAN BYTE PROCESSING (SET 1 via hardware translation)
 // ============================================================================
 
 VOID Ps2HandleScanByte(UINT8 Byte) {

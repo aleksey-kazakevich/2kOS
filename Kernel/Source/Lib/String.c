@@ -1,13 +1,11 @@
-#include <Types.h>
+#include <Mem/Allocator.h>
 #include <Lib/String.h>
 #include <Lib/StdArg.h>
 #include <Lib/StdIo.h>
-#include <Mem/Allocator.h>
 #include <Return.h>
+#include <Types.h>
 
-/*
- * =================== MEM ===================
- */
+/* =================== MEM =================== */
 VOID *MemCpy(VOID *Dst_, const VOID *Src_, USIZE N)
 {
     UINT8 *Dst = (UINT8 *)Dst_;
@@ -18,9 +16,7 @@ VOID *MemCpy(VOID *Dst_, const VOID *Src_, USIZE N)
         return Ret;
 
 #if defined(__x86_64__) || defined(__i386__)
-    /*
- * On x86/x86_64 rep movsb is very fast
- */
+    /* On x86/x86_64 rep movsb is very fast */
     asm volatile(
         "rep movsb"
         : "+D"(Dst), "+S"(Src), "+c"(N)
@@ -32,9 +28,7 @@ VOID *MemCpy(VOID *Dst_, const VOID *Src_, USIZE N)
     UINTPTR DstAddr = (UINTPTR)Dst;
     UINTPTR SrcAddr = (UINTPTR)Src;
 
-    /*
- * Align dst to word boundary byte byte
- */
+    /* Align dst to word boundary byte byte */
     while (N > 0 && (DstAddr & (W - 1)))
     {
         *Dst++ = *Src++;
@@ -43,18 +37,14 @@ VOID *MemCpy(VOID *Dst_, const VOID *Src_, USIZE N)
         SrcAddr = (UINTPTR)Src;
     }
 
-    /*
- * If src alignment is equal to dst alignment, you can copy in words
- */
+    /* If src alignment is equal to dst alignment, you can copy in words */
     if ((SrcAddr & (W - 1)) == (DstAddr & (W - 1)))
     {
         USIZE *Dw = (USIZE *)Dst;
         const USIZE *Sw = (const USIZE *)Src;
         USIZE Words = N / W;
 
-        /*
- * Unfolding a cycle of 4 words
- */
+        /* Unfolding a cycle of 4 words */
         while (Words >= 4)
         {
             Dw[0] = Sw[0];
@@ -70,9 +60,7 @@ VOID *MemCpy(VOID *Dst_, const VOID *Src_, USIZE N)
             *Dw++ = *Sw++;
         }
 
-        /*
- * Update pointers and remaining bytes
- */
+        /* Update pointers and remaining bytes */
         Dst = (UINT8 *)dw;
         Src = (const UINT8 *)sw;
         N = N & (W - 1);
@@ -81,13 +69,11 @@ VOID *MemCpy(VOID *Dst_, const VOID *Src_, USIZE N)
     {
         /*
  * If the alignments do not match, we leave everything byte-by-byte.
-           This is safe on architectures that require alignment.
+ * This is safe on architectures that require alignment.
  */
     }
 
-    /*
- * Tail bytes
- */
+    /* Tail bytes */
     while (N--)
     {
         *Dst++ = *Src++;
@@ -106,9 +92,7 @@ VOID *MemSet(VOID *S, INT C, USIZE N)
     const USIZE W = sizeof(UINTPTR);
     UINTPTR Addr = (UINTPTR)P;
 
-    /*
- * Align byte-by-byte to word boundaries
- */
+    /* Align byte-by-byte to word boundaries */
     while (N > 0 && (Addr & (W - 1)))
     {
         *P++ = Val;
@@ -116,9 +100,7 @@ VOID *MemSet(VOID *S, INT C, USIZE N)
         Addr = (UINTPTR)P;
     }
 
-    /*
- * Fill in whole words
- */
+    /* Fill in whole words */
     if (N >= W)
     {
         UINTPTR Word = Val;
@@ -136,9 +118,7 @@ VOID *MemSet(VOID *S, INT C, USIZE N)
         P = (UINT8 *)Pw;
     }
 
-    /*
- * Remaining bytes
- */
+    /* Remaining bytes */
     while (N--)
         *P++ = Val;
 
@@ -187,9 +167,7 @@ VOID *MemMove(VOID *Dst0, const VOID *Src0, USIZE N)
     UINT8 *Dst = (UINT8 *)Dst0;
     const UINT8 *Src = (const UINT8 *)Src0;
 
-    if (Dst < Src) /*
- * copy forward
- */
+    if (Dst < Src) /* copy forward */
     {
         USIZE Word = sizeof(UINTPTR);
         while (N && ((UINTPTR)Dst & (Word - 1)))
@@ -211,9 +189,7 @@ VOID *MemMove(VOID *Dst0, const VOID *Src0, USIZE N)
         while (N--)
             *Dst++ = *Src++;
     }
-    else /*
- * dst > src - copy back
- */
+    else /* dst > src - copy back */
     {
         Dst += N;
         Src += N;
@@ -259,9 +235,7 @@ VOID *MemMem(const VOID *HayStack, USIZE HayStackLen, const VOID *Needle, USIZE 
     return NULLPTR;
 }
 
-/*
- * =================== STR ===================
- */
+/* =================== STR =================== */
 USIZE StrLen(const CHAR *S)
 {
     const CHAR *P = S;
@@ -368,9 +342,7 @@ CHAR *StrnCat(CHAR *Dest, const CHAR *Src, USIZE N)
 {
     CHAR *D = Dest;
     while (*D)
-        ++D; /*
- * let's find the end dest
- */
+        ++D; /* let's find the end dest */
     USIZE I = 0;
     while (I < N && Src[I] != '\0')
     {

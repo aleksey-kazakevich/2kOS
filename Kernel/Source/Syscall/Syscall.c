@@ -1,11 +1,11 @@
-#include <Syscall.h>
-#include <Basecon.h>
-#include <Scheduler.h>
+#include <Mem/Allocator.h>
 #include <Mem/Paging.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
+#include <Scheduler.h>
+#include <Syscall.h>
+#include <Basecon.h>
 #include <Return.h>
-#include <Mem/Allocator.h>
 
 static SyscallFunction GSyscallTable[SYSCALL_MAX] = {0};
 static UINT32 GSyscallCount = 0;

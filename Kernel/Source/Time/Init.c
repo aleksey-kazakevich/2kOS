@@ -1,8 +1,8 @@
-#include <Types.h>
-#include <Basecon.h>
+#include <Drivers/Hpet.h>
 #include <Time/Clock.h>
 #include <Time/Timer.h>
-#include <Drivers/Hpet.h>
+#include <Basecon.h>
+#include <Types.h>
 
 VOID InitTimer(VOID) {
     INT TimerHz = 1000;
