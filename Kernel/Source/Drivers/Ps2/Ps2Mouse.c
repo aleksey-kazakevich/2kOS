@@ -46,16 +46,16 @@
 // Driver State
 // ============================================================================
 
-static Ps2MouseState GMouse = {0};
-static Ps2MouseSubscriber GSubscribers[PS2_MOUSE_MAX_SUBSCRIBERS] = {0};
+STATIC Ps2MouseState GMouse = {0};
+STATIC Ps2MouseSubscriber GSubscribers[PS2_MOUSE_MAX_SUBSCRIBERS] = {0};
 
-static struct {
+STATIC struct {
     MouseEvent Events[PS2_MOUSE_QUEUE_SIZE];
     volatile UINT32 Head;
     volatile UINT32 Tail;
 } GMouseQueue = {0};
 
-static BOOL MouseQueuePush(const MouseEvent *Event) {
+STATIC BOOL MouseQueuePush(const MouseEvent *Event) {
     UINT32 Next = (GMouseQueue.Head + 1) % PS2_MOUSE_QUEUE_SIZE;
     if (Next == GMouseQueue.Tail) {
         GMouse.ErrorCount++;
@@ -66,7 +66,7 @@ static BOOL MouseQueuePush(const MouseEvent *Event) {
     return TRUE;
 }
 
-static BOOL MouseQueuePop(MouseEvent *Event) {
+STATIC BOOL MouseQueuePop(MouseEvent *Event) {
     if (GMouseQueue.Head == GMouseQueue.Tail) {
         return FALSE;
     }
@@ -79,7 +79,7 @@ static BOOL MouseQueuePop(MouseEvent *Event) {
 // Auxiliary functions for working with the port
 // ============================================================================
 
-static VOID Ps2MouseFlushBuffer(VOID) {
+STATIC VOID Ps2MouseFlushBuffer(VOID) {
     INT Timeout = 100;
     while (Timeout--) {
         UINT8 Status = Inb(PS2_PORT_STATUS);
@@ -92,7 +92,7 @@ static VOID Ps2MouseFlushBuffer(VOID) {
     }
 }
 
-static UINT8 Ps2MouseReadWithTimeout(INT TimeoutMs) {
+STATIC UINT8 Ps2MouseReadWithTimeout(INT TimeoutMs) {
     while (TimeoutMs--) {
         UINT8 Status = Inb(PS2_PORT_STATUS);
         if (Status & PS2_STATUS_OUTPUT_FULL) {
@@ -103,7 +103,7 @@ static UINT8 Ps2MouseReadWithTimeout(INT TimeoutMs) {
     return 0xFF;
 }
 
-static VOID Ps2MouseWritePort(UINT8 Data) {
+STATIC VOID Ps2MouseWritePort(UINT8 Data) {
     INT Timeout = 10000;
     while (Timeout--) {
         if (!(Inb(PS2_PORT_STATUS) & PS2_STATUS_INPUT_FULL)) {
@@ -125,7 +125,7 @@ static VOID Ps2MouseWritePort(UINT8 Data) {
     Outb(PS2_PORT_DATA, Data);
 }
 
-static BOOL Ps2MouseCommand(UINT8 Command, UINT8 *Response, UINT8 ResponseLen) {
+STATIC BOOL Ps2MouseCommand(UINT8 Command, UINT8 *Response, UINT8 ResponseLen) {
     INT Retry = 3;
     
     while (Retry--) {
@@ -154,7 +154,7 @@ static BOOL Ps2MouseCommand(UINT8 Command, UINT8 *Response, UINT8 ResponseLen) {
     return FALSE;
 }
 
-static BOOL Ps2MouseCommandWithData(UINT8 Command, UINT8 Data) {
+STATIC BOOL Ps2MouseCommandWithData(UINT8 Command, UINT8 Data) {
     INT Retry = 3;
     
     while (Retry--) {
@@ -187,7 +187,7 @@ static BOOL Ps2MouseCommandWithData(UINT8 Command, UINT8 Data) {
     return FALSE;
 }
 
-static BOOL Ps2MouseCommandRead(UINT8 Command, UINT8 *Response, UINT8 ResponseLen) {
+STATIC BOOL Ps2MouseCommandRead(UINT8 Command, UINT8 *Response, UINT8 ResponseLen) {
     INT Retry = 3;
     
     while (Retry--) {
@@ -217,7 +217,7 @@ static BOOL Ps2MouseCommandRead(UINT8 Command, UINT8 *Response, UINT8 ResponseLe
 }
 
 
-static BOOL Ps2MouseSimpleCommand(UINT8 Command) {
+STATIC BOOL Ps2MouseSimpleCommand(UINT8 Command) {
     return Ps2MouseCommand(Command, NULLPTR, 0);
 }
 
@@ -225,7 +225,7 @@ static BOOL Ps2MouseSimpleCommand(UINT8 Command) {
 // Resetting the mouse
 // ============================================================================
 
-static BOOL Ps2MouseReset(VOID) {
+STATIC BOOL Ps2MouseReset(VOID) {
     UINT8 Response;
     
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: resetting mouse...\n");
@@ -266,7 +266,7 @@ static BOOL Ps2MouseReset(VOID) {
 // Detecting mouse type
 // ============================================================================
 
-static INT Ps2MouseDetectType(VOID) {
+STATIC INT Ps2MouseDetectType(VOID) {
     UINT8 Param[2];
     
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: detecting mouse type...\n");
@@ -331,7 +331,7 @@ static INT Ps2MouseDetectType(VOID) {
 // Packet processing
 // ============================================================================
 
-static VOID ProcessMousePacket(VOID) {
+STATIC VOID ProcessMousePacket(VOID) {
     UINT8 *Packet = GMouse.Packet;
     MouseEvent Event;
     INT RelX, RelY;
@@ -424,7 +424,7 @@ static VOID ProcessMousePacket(VOID) {
 // Handle one byte
 // ============================================================================
 
-static VOID Ps2MouseHandleByte(UINT8 Byte) {
+STATIC VOID Ps2MouseHandleByte(UINT8 Byte) {
     switch (GMouse.State) {
         case PS2_MOUSE_STATE_IGNORE:
             return;
@@ -618,6 +618,8 @@ INT Ps2MouseInit(VOID) {
     }
     
     IoapicUnmaskIrq(Gsi);
+
+    Ps2MouseRegisterSysDevice();
     
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: irq: gsi=%d, vector=%d\n", Gsi, MOUSE);
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: initialized successfully!\n");
@@ -712,4 +714,72 @@ INT Ps2MouseDispatchEvents(VOID) {
         Count++;
     }
     return Count;
+}
+
+STATIC const CHAR *Ps2MouseTypeToString(UINT8 Type) {
+    switch (Type) {
+        case PS2_MOUSE_STANDARD:     return "standard";
+        case PS2_MOUSE_INTELLIMOUSE: return "intellimouse";
+        case PS2_MOUSE_EXPLORER:     return "explorer";
+        default:                     return "unknown";
+    }
+}
+
+SysDevice *Ps2MouseRegisterSysDevice(VOID) {
+    if (!GMouse.Initialized) return NULLPTR;
+
+    // Уже зарегистрирована?
+    SysDevice *Existing = SysDeviceFind("MOUSE");
+    if (Existing) return Existing;
+
+    // Родитель — PS2 bus
+    SysDevice *Parent = Ps2GetSysDevice();
+    if (!Parent) Parent = SysDeviceGetRoot();
+    if (!Parent) return NULLPTR;
+
+    SysDevice *Dev = SysDeviceCreate(Parent,
+                                      "MOUSE",
+                                      "PS/2 Mouse",
+                                      SYSDEV_TYPE_INPUT);
+    if (!Dev) return NULLPTR;
+
+    // --- Ресурсы ---
+
+    if (GMouse.Gsi) {
+        SysDeviceAddResource(Dev, SYSDEV_RES_IRQ, GMouse.Gsi, 1);
+        SysDeviceSetPropU32(Dev, "gsi", GMouse.Gsi);
+    }
+    SysDeviceSetPropU32(Dev, "vector", MOUSE);
+
+    // --- Свойства ---
+
+    SysDeviceSetPropU32(Dev, "port", 2);
+    SysDeviceSetPropU32(Dev, "mouse_type", GMouse.Type);
+    SysDeviceSetProp(Dev, "mouse_type_str",
+                     Ps2MouseTypeToString(GMouse.Type));
+    SysDeviceSetPropU32(Dev, "packet_size", GMouse.PacketSize);
+    SysDeviceSetPropU32(Dev, "sample_rate", GMouse.SampleRate);
+    SysDeviceSetPropU32(Dev, "resolution", GMouse.Resolution);
+    SysDeviceSetPropU32(Dev, "enabled", GMouse.Enabled ? 1 : 0);
+    SysDeviceSetPropU64(Dev, "event_count", GMouse.EventCount);
+    SysDeviceSetPropU64(Dev, "error_count", GMouse.ErrorCount);
+    SysDeviceSetPropU32(Dev, "out_of_sync", GMouse.OutOfSyncCount);
+
+    // Текущее состояние кнопок
+    SysDeviceSetPropU32(Dev, "pos_x", (UINT32)GMouse.MouseState.X);
+    SysDeviceSetPropU32(Dev, "pos_y", (UINT32)GMouse.MouseState.Y);
+    SysDeviceSetPropU32(Dev, "buttons",
+                        (GMouse.MouseState.LeftButton   ? 1 : 0) |
+                        (GMouse.MouseState.RightButton  ? 2 : 0) |
+                        (GMouse.MouseState.MiddleButton ? 4 : 0));
+
+    // --- Привязка к KDriver ---
+
+    if (GMouse.Driver) {
+        SysDeviceBindDriver(Dev, GMouse.Driver);
+    } else {
+        SysDeviceSetState(Dev, SYSDEV_STATE_ENABLED);
+    }
+
+    return Dev;
 }

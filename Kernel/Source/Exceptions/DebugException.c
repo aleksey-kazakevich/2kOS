@@ -10,13 +10,13 @@
 // Bits 0-3, 13-15 are reset to 0. Reserved bits remain 1.
 #define DR6_CLEAR_MASK  0xFFFF0FF0
 
-static inline UINT64 ReadDr6(VOID) {
+STATIC INLINE UINT64 ReadDr6(VOID) {
     UINT64 Val;
     asm volatile("mov %%dr6, %0" : "=r"(Val));
     return Val;
 }
 
-static inline VOID WriteDr6(UINT64 Val) {
+STATIC INLINE VOID WriteDr6(UINT64 Val) {
     asm volatile("mov %0, %%dr6" : : "r"(Val));
 }
 

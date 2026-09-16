@@ -8,33 +8,33 @@ typedef struct ListHead {
     struct ListHead *Prev;
 } ListHead;
 
-static inline VOID ListInit(ListHead *Head) {
+STATIC INLINE VOID ListInit(ListHead *Head) {
     Head->Next = Head;
     Head->Prev = Head;
 }
 
-static inline VOID ListAdd(ListHead *Head, ListHead *Node) {
+STATIC INLINE VOID ListAdd(ListHead *Head, ListHead *Node) {
     Node->Next = Head->Next;
     Node->Prev = Head;
     Head->Next->Prev = Node;
     Head->Next = Node;
 }
 
-static inline VOID ListAddTail(ListHead *Head, ListHead *Node) {
+STATIC INLINE VOID ListAddTail(ListHead *Head, ListHead *Node) {
     Node->Next = Head;
     Node->Prev = Head->Prev;
     Head->Prev->Next = Node;
     Head->Prev = Node;
 }
 
-static inline VOID ListDel(ListHead *Node) {
+STATIC INLINE VOID ListDel(ListHead *Node) {
     Node->Prev->Next = Node->Next;
     Node->Next->Prev = Node->Prev;
     Node->Next = NULLPTR;
     Node->Prev = NULLPTR;
 }
 
-static inline BOOL ListEmpty(ListHead *Head) {
+STATIC INLINE BOOL ListEmpty(ListHead *Head) {
     return Head->Next == Head;
 }
 

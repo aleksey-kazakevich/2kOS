@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AcpiTables.h"
+#include <SysDevice.h>
 #include <Types.h>
 
 // ============================================================================
@@ -115,3 +116,6 @@ INT AcpiGetOverrideForSource(UINT8 Source, AcpiIntOverride *Out);
 // Power management (minimal, kernel only)
 VOID AcpiReboot(VOID);
 VOID AcpiShutdown(VOID);
+
+SysDevice *AcpiGetSysDevice(VOID);
+SysDevice *AcpiRegisterSysDevices(VOID);

@@ -28,3 +28,4 @@ CHAR *StrDup(const CHAR *S);
 INT AToI(const CHAR* str);
 LONG AToL(const CHAR* Str);
 CHAR* UToA(UINT32 Value, CHAR* Str, INT Base);
+UINT8 AToHex(const CHAR *Str);

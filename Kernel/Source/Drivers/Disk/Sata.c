@@ -21,16 +21,16 @@
 #define SATA_DEBUG          1
 
 // ==================== GLOBALS ====================
-static HbaMem* GSataHba = NULLPTR;
-static UINTPTR GSataPhysBase = 0;
-static UINTPTR GSataVirtBase = 0;
-static PciDevice* GSataPciDev = NULLPTR;
-static SataPort* GSataPorts[32];
-static UINT32 GSataIrqGsi = 0;
-static BOOL GSataIrqRegistered = FALSE;
+STATIC HbaMem* GSataHba = NULLPTR;
+STATIC UINTPTR GSataPhysBase = 0;
+STATIC UINTPTR GSataVirtBase = 0;
+STATIC PciDevice* GSataPciDev = NULLPTR;
+STATIC SataPort* GSataPorts[32];
+STATIC UINT32 GSataIrqGsi = 0;
+STATIC BOOL GSataIrqRegistered = FALSE;
 
-static volatile UINT32 GSataIrqCount = 0;
-static volatile UINT32 GSataErrorCount = 0;
+STATIC volatile UINT32 GSataIrqCount = 0;
+STATIC volatile UINT32 GSataErrorCount = 0;
 
 // ==================== DEBUG MACROS ====================
 #define SATA_DEBUG_PRINT(fmt, ...) \
@@ -42,16 +42,16 @@ static volatile UINT32 GSataErrorCount = 0;
 VOID SataRegisterDisk(SataPort *Port, INT PortNum);
 
 // ==================== HELPER FUNCTIONS ====================
-static inline VOID SataMdelay(UINT32 Ms) {
+STATIC INLINE VOID SataMdelay(UINT32 Ms) {
     TimerMdelay(Ms);
 }
 
-static inline VOID SataUdelay(UINT32 Us) {
+STATIC INLINE VOID SataUdelay(UINT32 Us) {
     TimerUdelay(Us);
 }
 
 // Getting milliseconds based on HPET
-static inline UINT64 SataGetMs(VOID) {
+STATIC INLINE UINT64 SataGetMs(VOID) {
     UINT32 TicksPerMs = TimerTicksPerMs();
     if (TicksPerMs == 0) {
         TicksPerMs = 1;  // Divide by zero protection
@@ -59,28 +59,28 @@ static inline UINT64 SataGetMs(VOID) {
     return TimerTicks() / TicksPerMs;
 }
 
-static inline BOOL SataTimedOut(UINT64 StartMs, UINT32 TimeoutMs) {
+STATIC INLINE BOOL SataTimedOut(UINT64 StartMs, UINT32 TimeoutMs) {
     return (SataGetMs() - StartMs) >= TimeoutMs;
 }
 
 // Flush posted writes (as in Haiku)
-static inline VOID SataFlushPostedWrites(HbaPort* Port) {
+STATIC INLINE VOID SataFlushPostedWrites(HbaPort* Port) {
     volatile UINT32 dummy = Port->Cmd;
     (VOID)dummy;
 }
 
-static inline VOID SataFlushPostedWritesHba(HbaMem* Hba) {
+STATIC INLINE VOID SataFlushPostedWritesHba(HbaMem* Hba) {
     volatile UINT32 dummy = Hba->Ghc;
     (VOID)dummy;
 }
 
 // Memory barrier to guarantee the visibility of recordings to the device
-static inline VOID SataMemoryBarrier(VOID) {
+STATIC INLINE VOID SataMemoryBarrier(VOID) {
     __sync_synchronize();
 }
 
 // Stop port (Haiku: Disable)
-static BOOL SataDisablePort(HbaPort* Port) {
+STATIC BOOL SataDisablePort(HbaPort* Port) {
     if ((Port->Cmd & SATA_HBA_PxCMD_ST) == 0) {
         return TRUE;
     }
@@ -101,7 +101,7 @@ static BOOL SataDisablePort(HbaPort* Port) {
 }
 
 // Launching the port (Haiku: Enable)
-static BOOL SataEnablePort(HbaPort* Port) {
+STATIC BOOL SataEnablePort(HbaPort* Port) {
     if ((Port->Cmd & SATA_HBA_PxCMD_ST) != 0) {
         return TRUE;
     }
@@ -124,15 +124,15 @@ static BOOL SataEnablePort(HbaPort* Port) {
     return TRUE;
 }
 
-static VOID SataStopCmd(HbaPort* Port) {
+STATIC VOID SataStopCmd(HbaPort* Port) {
     SataDisablePort(Port);
 }
 
-static VOID SataStartCmd(HbaPort* Port) {
+STATIC VOID SataStartCmd(HbaPort* Port) {
     SataEnablePort(Port);
 }
 
-static INT SataFindCmdSlot(HbaPort* Port) {
+STATIC INT SataFindCmdSlot(HbaPort* Port) {
     UINT32 Slots = (Port->Sact | Port->Ci) & 0xFF;
     
     for (INT I = 0; I < 8; I++) {
@@ -144,7 +144,7 @@ static INT SataFindCmdSlot(HbaPort* Port) {
     return -1;
 }
 
-static INT SataAcquireBuffer(SataPort* Port) {
+STATIC INT SataAcquireBuffer(SataPort* Port) {
     while (__sync_lock_test_and_set(&Port->BufferSemaphore, 1)) {
         CpuPause();
     }
@@ -160,25 +160,25 @@ static INT SataAcquireBuffer(SataPort* Port) {
     return -1;
 }
 
-static VOID SataReleaseBuffer(SataPort* Port, INT Index) {
+STATIC VOID SataReleaseBuffer(SataPort* Port, INT Index) {
     if (Index < 0 || Index >= 8) return;
     __sync_synchronize();
     __sync_lock_release(&Port->BufferLocks[Index]);
     __sync_lock_release(&Port->BufferSemaphore);
 }
 
-static VOID SataPortLock(SataPort* Port) {
+STATIC VOID SataPortLock(SataPort* Port) {
     while (__sync_lock_test_and_set(&Port->PortLock, 1)) {
         CpuPause();
     }
 }
 
-static VOID SataPortUnlock(SataPort* Port) {
+STATIC VOID SataPortUnlock(SataPort* Port) {
     __sync_synchronize();
     __sync_lock_release(&Port->PortLock);
 }
 
-static BOOL SataAllocDmaPage(UINT64 *PhysOut, VOID **VirtOut) {
+STATIC BOOL SataAllocDmaPage(UINT64 *PhysOut, VOID **VirtOut) {
     VOID *Phys = PhysAllocAllocatePage(PhysAllocGet());
     if (!Phys) {
         return FALSE;
@@ -195,7 +195,7 @@ static BOOL SataAllocDmaPage(UINT64 *PhysOut, VOID **VirtOut) {
     return TRUE;
 }
 
-static BOOL SataWaitTfdIdle(HbaPort *Regs, UINT32 TimeoutMs) {
+STATIC BOOL SataWaitTfdIdle(HbaPort *Regs, UINT32 TimeoutMs) {
     UINT64 Start = SataGetMs();
     while ((Regs->Tfd & (SATA_ATA_DEV_BUSY | SATA_ATA_DEV_DRQ)) &&
            !SataTimedOut(Start, TimeoutMs)) {
@@ -204,7 +204,7 @@ static BOOL SataWaitTfdIdle(HbaPort *Regs, UINT32 TimeoutMs) {
     return (Regs->Tfd & (SATA_ATA_DEV_BUSY | SATA_ATA_DEV_DRQ)) == 0;
 }
 
-static BOOL SataClearBusyOverride(HbaPort *Regs) {
+STATIC BOOL SataClearBusyOverride(HbaPort *Regs) {
     if ((Regs->Tfd & (SATA_ATA_DEV_BUSY | SATA_ATA_DEV_DRQ)) == 0) {
         return TRUE;
     }
@@ -220,7 +220,7 @@ static BOOL SataClearBusyOverride(HbaPort *Regs) {
     return (Regs->Cmd & SATA_HBA_PxCMD_CLO) == 0;
 }
 
-static VOID SataRecoverPort(HbaPort *Regs) {
+STATIC VOID SataRecoverPort(HbaPort *Regs) {
     SataDisablePort(Regs);
     Regs->Is = 0xFFFFFFFF;
     Regs->Serr = 0xFFFFFFFF;
@@ -232,7 +232,7 @@ static VOID SataRecoverPort(HbaPort *Regs) {
 EXTERN(VOID, SataIrqStub(VOID));
 
 // Handling port interrupts (Haiku: Interrupt)
-static VOID SataProcessPortInterrupt(INT PortNum) {
+STATIC VOID SataProcessPortInterrupt(INT PortNum) {
     SataPort* Port = GSataPorts[PortNum];
     if (!Port || Port->Status != SATA_PORT_ACTIVE) {
         return;
@@ -298,7 +298,7 @@ VOID SataIrqHandler(VOID) {
 }
 
 // ==================== COMMAND EXECUTION ====================
-static INT SataExecuteCommand(SataPort* Port, UINT32 Slot,
+STATIC INT SataExecuteCommand(SataPort* Port, UINT32 Slot,
                                UINTPTR PhysBuffer, UINT32 ByteCount,
                                FisRegH2D* Fis, INT UseIrq) {
     HbaPort* Regs = Port->Regs;
@@ -384,7 +384,7 @@ static INT SataExecuteCommand(SataPort* Port, UINT32 Slot,
 }
 
 // ==================== IDENTIFY ====================
-static VOID SataPortIdentify(SataPort* Port) {
+STATIC VOID SataPortIdentify(SataPort* Port) {
     SATA_DEBUG_PRINT("port %d: identifying device...\n", Port->PortNum);
     
     HbaPort* Regs = Port->Regs;
@@ -472,7 +472,7 @@ static VOID SataPortIdentify(SataPort* Port) {
 }
 
 // ==================== PORT ACCESS ====================
-static INT SataPortAccess(SataPort* Port, UINT64 Lba, UINT32 Count,
+STATIC INT SataPortAccess(SataPort* Port, UINT64 Lba, UINT32 Count,
                            UINTPTR PhysBuffer, INT Write) {
     SataPortLock(Port);
     
@@ -512,7 +512,7 @@ static INT SataPortAccess(SataPort* Port, UINT64 Lba, UINT32 Count,
 }
 
 // ==================== PORT INITIALIZATION ====================
-static SataPort* SataPortInit(INT PortNum, HbaPort* PortRegs, HbaMem* Hba) {
+STATIC SataPort* SataPortInit(INT PortNum, HbaPort* PortRegs, HbaMem* Hba) {
     SATA_DEBUG_PRINT("initializing port %d...\n", PortNum);
     
     SataPort* Port = (SataPort*)MemoryAllocate(sizeof(SataPort));
@@ -851,19 +851,19 @@ VOID SataGetStats(UINT32 *IrqCount, UINT32 *ErrorCount) {
     if (ErrorCount) *ErrorCount = GSataErrorCount;
 }
 
-static INT SataDiskRead(Disk *Disk, UINT64 Lba, UINT32 Count, VOID *Buffer) {
+STATIC INT SataDiskRead(Disk *Disk, UINT64 Lba, UINT32 Count, VOID *Buffer) {
     if (!Disk || !Disk->DriverData) return DEVICE_INVALID;
     SataPort *Port = (SataPort*)Disk->DriverData;
     return SataPortRead(Port, Lba, Count, Buffer);
 }
 
-static INT SataDiskWrite(Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buffer) {
+STATIC INT SataDiskWrite(Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buffer) {
     if (!Disk || !Disk->DriverData) return DEVICE_INVALID;
     SataPort *Port = (SataPort*)Disk->DriverData;
     return SataPortWrite(Port, Lba, Count, Buffer);
 }
 
-static INT SataDiskFlush(Disk *Disk) {
+STATIC INT SataDiskFlush(Disk *Disk) {
     // TODO: Implement flush for SATA (NCQ flush)
     return SUCCESS;
 }

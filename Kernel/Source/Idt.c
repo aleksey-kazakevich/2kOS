@@ -20,7 +20,7 @@
 
 extern VOID SyscallEntry(VOID);
 
-static VOID SetupSyscall(VOID) {
+STATIC VOID SetupSyscall(VOID) {
     UINT64 Efer = ReadMSR(IA32_EFER);
     Efer |= EFER_SCE;
     WriteMSR(IA32_EFER, Efer);
@@ -70,7 +70,7 @@ VOID IdtInit(VOID) {
     Idtp.Limit = (UINT16)(sizeof(Idt) - 1);
     Idtp.Base = (UINT64)&Idt;
 
-    static const VOID (*Stubs[32])() = {
+    STATIC const VOID (*Stubs[32])() = {
         IsrStub9, IsrStub15, IsrStub17,
         IsrStub20, IsrStub21, IsrStub22, IsrStub23,
         IsrStub24, IsrStub25, IsrStub26, IsrStub27,

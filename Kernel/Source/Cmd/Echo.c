@@ -6,7 +6,7 @@
 INT CmdEchoHandler(INT ArgC, const CHAR *ArgV[]) {
     // Если нет аргументов, просто выводим пустую строку
     if (ArgC < 2) {
-        BaseconPutChar('\n');
+        BaseconPutString("\n");
         return 0;
     }
     
@@ -14,10 +14,10 @@ INT CmdEchoHandler(INT ArgC, const CHAR *ArgV[]) {
     for (INT I = 1; I < ArgC; I++) {
         BaseconPutString(ArgV[I]);
         if (I < ArgC - 1) {
-            BaseconPutChar(' ');
+            BaseconPutString(" ");
         }
     }
-    BaseconPutChar('\n');
+    BaseconPutString("\n");
     
     return 0;
 }

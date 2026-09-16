@@ -1,5 +1,6 @@
 #pragma once
 
+#include <SysDevice.h>
 #include <Types.h>
 #include <Rgb.h>
 
@@ -138,3 +139,5 @@ FramebufferColor FramebufferHex(UINT32 Hex);
 UINT32 ColorToPixel(FramebufferColor C);
 VOID PutPixelRaw(INT32 X, INT32 Y, UINT32 Pixel);
 VOID PutPixelRawLayer(INT Layer, INT32 X, INT32 Y, UINT32 Pixel);
+
+SysDevice *FramebufferRegisterSysDevice(VOID);

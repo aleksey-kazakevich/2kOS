@@ -5,10 +5,10 @@
 #include <SpinLock.h>
 
 // Глобальный список подписчиков
-static ListHead GSubscriberList;
-static SpinLock GSubscriberLock;
-static UINT32 GSubscriberCount = 0;
-static BOOL GInitialized = FALSE;
+STATIC ListHead GSubscriberList;
+STATIC SpinLock GSubscriberLock;
+STATIC UINT32 GSubscriberCount = 0;
+STATIC BOOL GInitialized = FALSE;
 
 VOID TimerSubscriberInit(VOID) {
     if (GInitialized) return;

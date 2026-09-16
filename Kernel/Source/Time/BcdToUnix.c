@@ -8,12 +8,12 @@ UINT8 BinToBcd(UINT8 Bin) {
     return ((Bin / 10) << 4) | (Bin % 10);
 }
 
-static BOOL IsLeap(UINT32 Year) {
+STATIC BOOL IsLeap(UINT32 Year) {
     return (Year % 400 == 0) || (Year % 4 == 0 && Year % 100 != 0);
 }
 
-static UINT8 DaysInMonth(UINT32 Year, UINT8 Month) {
-    static const UINT8 Days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+STATIC UINT8 DaysInMonth(UINT32 Year, UINT8 Month) {
+    STATIC const UINT8 Days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
     if (Month == 2 && IsLeap(Year)) return 29;
     return Days[Month-1];
 }

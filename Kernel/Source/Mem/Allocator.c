@@ -14,8 +14,8 @@
 #endif
 #define HEAP_MAX_SIZE (512 * 1024 * 1024)  // 512 MB maximum
 
-static UINT64 GHeapCanary = 0;
-static BOOL GCanaryInitialized = FALSE;
+STATIC UINT64 GHeapCanary = 0;
+STATIC BOOL GCanaryInitialized = FALSE;
 
 /* Block header */
 typedef struct BlockHeader
@@ -31,26 +31,26 @@ typedef struct BlockHeader
 #define MIN_SPLIT_SIZE (sizeof(BlockHeader) + ALIGN)
 
 /* Global */
-static BlockHeader *HeapHead = NULLPTR;
-static BlockHeader *HeapTail = NULLPTR;
-static VOID *HeapStartVirt = NULLPTR;
-static VOID *HeapEndVirt = NULLPTR;
-static USIZE HeapCurrentSize = 0;
-static UINT64 HeapPhysBase = 0;
+STATIC BlockHeader *HeapHead = NULLPTR;
+STATIC BlockHeader *HeapTail = NULLPTR;
+STATIC VOID *HeapStartVirt = NULLPTR;
+STATIC VOID *HeapEndVirt = NULLPTR;
+STATIC USIZE HeapCurrentSize = 0;
+STATIC UINT64 HeapPhysBase = 0;
 
-static inline USIZE AlignUp(USIZE N) {
+STATIC INLINE USIZE AlignUp(USIZE N) {
     return (N + (ALIGN - 1)) & ~(ALIGN - 1);
 }
 
-static inline VOID *HeaderToPayload(BlockHeader *H) {
+STATIC INLINE VOID *HeaderToPayload(BlockHeader *H) {
     return (VOID *)((CHAR *)H + sizeof(BlockHeader));
 }
 
-static inline BlockHeader *PayloadToHeader(VOID *P) {
+STATIC INLINE BlockHeader *PayloadToHeader(VOID *P) {
     return (BlockHeader *)((CHAR *)P - sizeof(BlockHeader));
 }
 
-static VOID HeapCanaryInit(VOID) {
+STATIC VOID HeapCanaryInit(VOID) {
     if (GCanaryInitialized) return;
     
     UINT64 Seed = 0;
@@ -94,7 +94,7 @@ static VOID HeapCanaryInit(VOID) {
     GCanaryInitialized = TRUE;
 }
 
-static inline UINT64 HeapGetCanary(VOID) {
+STATIC INLINE UINT64 HeapGetCanary(VOID) {
     if (!GCanaryInitialized) {
         HeapCanaryInit();
     }
@@ -102,7 +102,7 @@ static inline UINT64 HeapGetCanary(VOID) {
 }
 
 /* Expand heap using PhysAlloc */
-static INT HeapExpand(USIZE Bytes) {
+STATIC INT HeapExpand(USIZE Bytes) {
     USIZE Need = AlignUp(Bytes + sizeof(BlockHeader));
     USIZE PagesNeeded = (Need + PAGE_SIZE - 1) / PAGE_SIZE;
     USIZE ExpandSize = PagesNeeded * PAGE_SIZE;
@@ -175,7 +175,7 @@ INT MemoryAllocatorInit(VOID) {
 }
 
 /* Find free block */
-static BlockHeader *FindFit(USIZE Size) {
+STATIC BlockHeader *FindFit(USIZE Size) {
     BlockHeader *Cur = HeapHead;
     while (Cur) {
         if (Cur->Free && Cur->Size >= Size)
@@ -186,7 +186,7 @@ static BlockHeader *FindFit(USIZE Size) {
 }
 
 /* Split block */
-static VOID SplitBlock(BlockHeader *H, USIZE ReqSize) {
+STATIC VOID SplitBlock(BlockHeader *H, USIZE ReqSize) {
     if (!H) return;
     if (H->Size < ReqSize + MIN_SPLIT_SIZE) return;
     
@@ -205,7 +205,7 @@ static VOID SplitBlock(BlockHeader *H, USIZE ReqSize) {
 }
 
 /* Coalesce adjacent free blocks */
-static VOID Coalesce(BlockHeader *H) {
+STATIC VOID Coalesce(BlockHeader *H) {
     if (!H) return;
     
     if (H->Next && H->Next->Free) {

@@ -14,7 +14,7 @@
 #define CMOS_CENT  0x32
 #define CMOS_STAT_B 0x0B
 
-static UINT8 CmosRead(UINT8 Reg) {
+STATIC UINT8 CmosRead(UINT8 Reg) {
     Outb(CMOS_ADDR, Reg);
     return Inb(CMOS_DATA);
 }

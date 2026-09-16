@@ -1,5 +1,6 @@
 #pragma once
 
+#include <SysDevice.h>
 #include <SpinLock.h>
 #include <KDriver.h>
 #include <Types.h>
@@ -114,3 +115,5 @@ ComDevice* ComGetDefault(VOID);  // COM1
 // Utils
 VOID ComFlush(ComDevice *Dev);
 VOID ComSetBaudRate(ComDevice *Dev, UINT32 BaudRate);
+
+UINT32 ComRegisterSysDevices(VOID);

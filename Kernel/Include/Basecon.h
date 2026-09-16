@@ -27,6 +27,7 @@ typedef struct {
 // Scrollback structure (entire output history)
 typedef struct {
     CHAR Lines[BASECON_SCROLLBACK_SIZE][BASECON_SCROLLBACK_LINE_LEN];
+    FramebufferColor Colors[BASECON_SCROLLBACK_SIZE];
     UINT32 Count;
     UINT32 StartLine;
     UINT32 MaxDisplayLines;
@@ -63,7 +64,8 @@ typedef enum {
     BASECON_TYPE_ERROR,
     BASECON_TYPE_INFO,
     BASECON_TYPE_SUCCESS,
-    BASECON_TYPE_NORMAL
+    BASECON_TYPE_NORMAL,
+    BASECON_TYPE_WARNING
 } BaseconMsgType;
 
 // Callback for input
@@ -75,7 +77,6 @@ typedef VOID (*BaseconInputCallback)(const CHAR *Input, VOID *UserData);
 
 INT BaseconInit(Framebuffer *FB);
 VOID BaseconClear(VOID);
-VOID BaseconPutChar(CHAR C);
 VOID BaseconPutString(const CHAR *Str);
 INT BaseconPrintf(BaseconMsgType Type, const CHAR *Fmt, ...);
 VOID BaseconSetColors(FramebufferColor Fg, FramebufferColor Bg);

@@ -28,7 +28,7 @@ UINT32 TimerApicMs(VOID);
 UINT32 TimerTicksPerMs(VOID);
 UINT64 TimerTscFreq(VOID);
 
-static inline UINT64 TimerMsToTicks(UINT32 Ms) {
+STATIC INLINE UINT64 TimerMsToTicks(UINT32 Ms) {
     UINT32 Tpm = TimerTicksPerMs();
     if (Tpm == 0) {
         Tpm = 1;
@@ -36,6 +36,7 @@ static inline UINT64 TimerMsToTicks(UINT32 Ms) {
     return (UINT64)Ms * Tpm;
 }
 
+VOID TimerDelayInit(VOID);
 VOID TimerUdelay(UINT32 Us);
 VOID TimerMdelay(UINT32 Ms);
 VOID TimerSdelay(UINT32 S);

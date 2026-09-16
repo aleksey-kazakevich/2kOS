@@ -22,12 +22,13 @@
 #define PERMISSION_DENIED -17
 #define OPERATION_DISABLED -18
 #define CANCELED -19
+#define ALREADY_RUNNING -20
 
 // Do not use INCORRECT_ERROR_CODE in RETURN macro
 #define INCORRECT_ERROR_CODE -999
 
 extern INT LastCode;
-static INT LeastCode = CANCELED;
+STATIC INT LeastCode = ALREADY_RUNNING;
 
 typedef struct {
     BOOL IsError;
@@ -40,11 +41,11 @@ typedef struct {
         return Code; \
     } while (0)
 
-static inline INT GetLastCode(VOID) {
+STATIC INLINE INT GetLastCode(VOID) {
     return LastCode;
 }
 
-static inline ErrorState IsError(INT Value) {
+STATIC INLINE ErrorState IsError(INT Value) {
     if (Value < LeastCode) {
 	ErrorState TrueState;
 	TrueState.IsError = TRUE;
@@ -63,7 +64,7 @@ static inline ErrorState IsError(INT Value) {
     return FalseState;
 }
 
-static inline const CHAR* ReturnCode2String(INT Code) {
+STATIC INLINE const CHAR* ReturnCode2String(INT Code) {
     if (Code > 0) return "";
     if (Code < LeastCode) return "";
     switch (Code) {
@@ -84,6 +85,8 @@ static inline const CHAR* ReturnCode2String(INT Code) {
         case DEVICE_ERROR: return "DEVICE_ERROR";
         case PERMISSION_DENIED: return "PERMISSION_DENIED";
         case DEVICE_INVALID: return "DEVICE_INVALID";
+	case CANCELED: return "CANCELED";
+	case ALREADY_RUNNING: return "ALREADY_RUNNING";
     }
     return "";
 }

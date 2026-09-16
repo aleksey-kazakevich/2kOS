@@ -3,13 +3,13 @@
 
 volatile ClockTime SystemClock = {0, 0, 0, 0}; //start from 00:00:00
 
-static const UINT8 DaysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+STATIC const UINT8 DaysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
-static INT IsLeapYear(INT Year) {
+STATIC INT IsLeapYear(INT Year) {
     return (Year % 4 == 0 && (Year % 100 != 0 || Year % 400 == 0));
 }
 
-static UINT32 RtcToEpoch(UINT32 Year, UINT32 Month, UINT32 Day,
+STATIC UINT32 RtcToEpoch(UINT32 Year, UINT32 Month, UINT32 Day,
                              UINT32 Hour, UINT32 Minute, UINT32 Second) {
     UINT32 Epoch = 0;
     

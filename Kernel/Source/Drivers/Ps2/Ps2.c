@@ -12,13 +12,14 @@
 // Global data
 // ============================================================================
 
-static Ps2Controller GPs2Controller = {0};
+STATIC Ps2Controller GPs2Controller = {0};
+STATIC SysDevice *GPs2SysRoot = NULLPTR;
 
-static UINT8 Ps2ReadStatus(VOID) {
+STATIC UINT8 Ps2ReadStatus(VOID) {
     return Inb(PS2_PORT_STATUS);
 }
 
-static VOID Ps2WaitWrite(VOID) {
+STATIC VOID Ps2WaitWrite(VOID) {
     INT Timeout = 100000;
     while (Timeout--) {
         if (!(Ps2ReadStatus() & PS2_STATUS_INPUT_FULL)) {
@@ -28,7 +29,7 @@ static VOID Ps2WaitWrite(VOID) {
     }
 }
 
-static VOID Ps2WaitRead(VOID) {
+STATIC VOID Ps2WaitRead(VOID) {
     INT Timeout = 100000;
     while (Timeout--) {
         if (Ps2ReadStatus() & PS2_STATUS_OUTPUT_FULL) {
@@ -63,7 +64,7 @@ VOID Ps2WriteWithCommand(UINT8 Command, UINT8 Data) {
     Ps2WriteData(Data);
 }
 
-static VOID Ps2FlushOutput(VOID) {
+STATIC VOID Ps2FlushOutput(VOID) {
     INT Timeout = 100;
     while (Timeout-- && (Ps2ReadStatus() & PS2_STATUS_OUTPUT_FULL)) {
         Inb(PS2_PORT_DATA);
@@ -71,7 +72,7 @@ static VOID Ps2FlushOutput(VOID) {
     }
 }
 
-static UINT8 Ps2ReadWithTimeout(INT TimeoutMs) {
+STATIC UINT8 Ps2ReadWithTimeout(INT TimeoutMs) {
     while (TimeoutMs--) {
         if (Ps2ReadStatus() & PS2_STATUS_OUTPUT_FULL) {
             return Ps2ReadData();
@@ -81,7 +82,7 @@ static UINT8 Ps2ReadWithTimeout(INT TimeoutMs) {
     return 0xFF;
 }
 
-static BOOL Ps2WritePort(UINT8 Port, UINT8 Data) {
+STATIC BOOL Ps2WritePort(UINT8 Port, UINT8 Data) {
     if (Port == 2) {
         Ps2SendCommand(0xD4);
     }
@@ -89,7 +90,7 @@ static BOOL Ps2WritePort(UINT8 Port, UINT8 Data) {
     return TRUE;
 }
 
-static BOOL Ps2WaitAck(INT TimeoutMs) {
+STATIC BOOL Ps2WaitAck(INT TimeoutMs) {
     UINT8 Response = Ps2ReadWithTimeout(TimeoutMs);
     return Response == PS2_RESPONSE_ACK;
 }
@@ -98,7 +99,7 @@ static BOOL Ps2WaitAck(INT TimeoutMs) {
 // Device discovery on a port
 // ============================================================================
 
-static UINT8 Ps2DetectDevice(UINT8 Port) {
+STATIC UINT8 Ps2DetectDevice(UINT8 Port) {
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: detecting device on port %d...\n", Port);
 
     if (Port == 2) {
@@ -294,7 +295,7 @@ static UINT8 Ps2DetectDevice(UINT8 Port) {
 // Controller initialization
 // ============================================================================
 
-static INT Ps2ControllerInit(VOID) {
+STATIC INT Ps2ControllerInit(VOID) {
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: initializing controller...\n");
     
     // Disable ports during initialization
@@ -333,6 +334,8 @@ static INT Ps2ControllerInit(VOID) {
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: final config = 0x%02X\n", Config);
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2: %s channel\n", 
                   GPs2Controller.DualChannel ? "dual" : "single");
+
+    Ps2RegisterSysDevice();
     
     RETURN(SUCCESS);
 }
@@ -442,4 +445,46 @@ VOID Ps2DisablePort1(VOID) {
 
 VOID Ps2DisablePort2(VOID) {
     Ps2SendCommand(PS2_CMD_DISABLE_PORT2);
+}
+
+SysDevice *Ps2GetSysDevice(VOID) {
+    return GPs2SysRoot;
+}
+
+SysDevice *Ps2RegisterSysDevice(VOID) {
+    if (!GPs2Controller.Initialized) return NULLPTR;
+
+    // Уже зарегистрирован?
+    if (GPs2SysRoot) return GPs2SysRoot;
+
+    SysDevice *Parent = SysDeviceGetRoot();
+    if (!Parent) return NULLPTR;
+
+    GPs2SysRoot = SysDeviceCreate(Parent,
+                                   "PS2",
+                                   "PS/2 Controller",
+                                   SYSDEV_TYPE_BUS);
+    if (!GPs2SysRoot) return NULLPTR;
+
+    // --- Свойства контроллера ---
+
+    SysDeviceSetPropU32(GPs2SysRoot, "dual_channel",
+                        GPs2Controller.DualChannel ? 1 : 0);
+    SysDeviceSetPropU32(GPs2SysRoot, "config",
+                        GPs2Controller.Config);
+    SysDeviceSetPropU32(GPs2SysRoot, "port1_present",
+                        GPs2Controller.Port1.Present ? 1 : 0);
+    SysDeviceSetPropU32(GPs2SysRoot, "port2_present",
+                        GPs2Controller.Port2.Present ? 1 : 0);
+
+    SysDeviceSetState(GPs2SysRoot, SYSDEV_STATE_ENABLED);
+
+    // --- Привязка к KDriver ---
+
+    KDriver *Drv = KDriverFindByName("PS/2");
+    if (Drv) {
+        SysDeviceBindDriver(GPs2SysRoot, Drv);
+    }
+
+    return GPs2SysRoot;
 }

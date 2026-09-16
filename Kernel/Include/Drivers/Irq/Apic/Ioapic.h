@@ -59,3 +59,5 @@ VOID IoapicEoi(UINT32 Gsi);
 // Working with Overrides
 INT IoapicProcessOverrides(VOID);
 INT IoapicGetOverride(UINT32 Source, UINT32 *Gsi, UINT32 *Flags);
+
+UINT32 IoapicRegisterSysDevices(VOID);

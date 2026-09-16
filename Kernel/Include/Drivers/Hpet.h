@@ -1,5 +1,6 @@
 #pragma once
 
+#include <SysDevice.h>
 #include <Types.h>
 
 // Initialization
@@ -17,6 +18,11 @@ UINT64 HpetGetMicroseconds(VOID);
 VOID HpetDelayUs(UINT32 Us);
 VOID HpetDelayMs(UINT32 Ms);
 
+UINT64 HpetTicksForUs(UINT32 Us);
+UINT64 HpetTicksForMs(UINT32 Ms);
+
 // APIC and TSC Calibration
 UINT32 HpetCalibrateApicTimer(UINT32 DesiredMs);
 UINT64 HpetCalibrateTsc(VOID);
+
+SysDevice *HpetRegisterSysDevice(VOID);

@@ -20,15 +20,15 @@
 
 Framebuffer GFramebuffer = {0};
 
-static BOOL SimdAvailable = FALSE;
-static BOOL AvxAvailable = FALSE;
-static BOOL Avx2Available = FALSE;
+STATIC BOOL SimdAvailable = FALSE;
+STATIC BOOL AvxAvailable = FALSE;
+STATIC BOOL Avx2Available = FALSE;
 
 // ============================================================================
 // Checking CPU features
 // ============================================================================
 
-static VOID DetectCpuFeatures(VOID) {
+STATIC VOID DetectCpuFeatures(VOID) {
     UINT32 Eax, Ebx, Ecx, Edx;
     
     Cpuid(1, &Eax, &Ebx, &Ecx, &Edx);
@@ -46,7 +46,7 @@ static VOID DetectCpuFeatures(VOID) {
 // FAST copy/fill functions
 // ============================================================================
 
-static inline VOID* FastCopyRep(VOID *Dst, const VOID *Src, USIZE Size) {
+STATIC INLINE VOID* FastCopyRep(VOID *Dst, const VOID *Src, USIZE Size) {
     asm volatile (
         "rep movsb"
         : "+D"(Dst), "+S"(Src), "+c"(Size)
@@ -56,7 +56,7 @@ static inline VOID* FastCopyRep(VOID *Dst, const VOID *Src, USIZE Size) {
     return Dst;
 }
 
-static VOID FastMemSet32_SSE(UINT32 *Dst, UINT32 Value, UINT32 Count) {
+STATIC VOID FastMemSet32_SSE(UINT32 *Dst, UINT32 Value, UINT32 Count) {
     if (!SimdAvailable) {
         for (UINT32 I = 0; I < Count; I++) Dst[I] = Value;
         return;
@@ -87,7 +87,7 @@ static VOID FastMemSet32_SSE(UINT32 *Dst, UINT32 Value, UINT32 Count) {
     }
 }
 
-static VOID FastMemSet32_AVX2(UINT32 *Dst, UINT32 Value, UINT32 Count) {
+STATIC VOID FastMemSet32_AVX2(UINT32 *Dst, UINT32 Value, UINT32 Count) {
     if (!Avx2Available) {
         FastMemSet32_SSE(Dst, Value, Count);
         return;
@@ -185,7 +185,7 @@ UINT32 ColorToPixel(FramebufferColor C) {
     return 0;
 }
 
-static inline BOOL ClipCoordFast(INT32 *X, INT32 *Y, UINT32 *W, UINT32 *H) {
+STATIC INLINE BOOL ClipCoordFast(INT32 *X, INT32 *Y, UINT32 *W, UINT32 *H) {
     if (*X < 0) { *W += *X; *X = 0; }
     if (*Y < 0) { *H += *Y; *Y = 0; }
     if (*X + *W > (INT32)GFramebuffer.Width) *W = GFramebuffer.Width - *X;
@@ -212,7 +212,7 @@ BOOL ClipCoord(INT32 *X, INT32 *Y) {
 // WORKING WITH LAYERS
 // ============================================================================
 
-static INT FramebufferAllocateLayer(INT LayerIndex) {
+STATIC INT FramebufferAllocateLayer(INT LayerIndex) {
     if (LayerIndex < 0 || LayerIndex >= MAX_LAYERS) return -1;
     
     // Increase the layer counter if necessary
@@ -631,6 +631,8 @@ INT FramebufferInit(UINT64 PhysAddr, UINT32 Width, UINT32 Height, UINT32 Pitch, 
     
     KDriverRegister(KDriverGenerateStruct("Framebuffer", 0, TRUE, NULLPTR, NULLPTR));
     FramebufferClear(RGB_BLACK);
+
+    FramebufferRegisterSysDevice();
     
     RETURN(SUCCESS);
 }
@@ -707,7 +709,7 @@ UINT32 Rgb565ToPixel(UINT16 Rgb565) {
     return ColorToPixel(Color);
 }
 
-static VOID DrawBitmapToBuffer(VOID *Buffer, 
+STATIC VOID DrawBitmapToBuffer(VOID *Buffer, 
                                UINT32 BufferWidth, UINT32 BufferHeight,
                                UINT32 BufferPitch, UINT32 BytesPerPixel,
                                const VOID *BitmapData,
@@ -839,4 +841,66 @@ VOID FramebufferDrawBitmap(const VOID *BitmapData,
                            INT32 X, INT32 Y,
                            UINT32 Scale) {
     FramebufferDrawBitmapTransparent(BitmapData, Width, Height, X, Y, Scale, 0xFFFF);
+}
+
+STATIC const CHAR *FramebufferFormatToString(FramebufferPixelFormat Format) {
+    switch (Format) {
+        case FB_FORMAT_RGB888:  return "RGB888";
+        case FB_FORMAT_BGR888:  return "BGR888";
+        case FB_FORMAT_RGB565:  return "RGB565";
+        default:                return "UNKNOWN";
+    }
+}
+
+SysDevice *FramebufferRegisterSysDevice(VOID) {
+    if (!GFramebuffer.Initialized) {
+        return NULLPTR;
+    }
+
+    // Проверяем, не зарегистрирован ли уже
+    SysDevice *Existing = SysDeviceFind("DISPLAY");
+    if (Existing) return Existing;
+
+    SysDevice *Parent = SysDeviceGetRoot();
+    if (!Parent) return NULLPTR;
+
+    SysDevice *Display = SysDeviceCreate(Parent,
+                                          "DISPLAY",
+                                          "Primary framebuffer",
+                                          SYSDEV_TYPE_DISPLAY);
+    if (!Display) return NULLPTR;
+
+    // --- Ресурсы ---
+
+    // Физический MMIO регион framebuffer
+    UINT64 FbSize = (UINT64)GFramebuffer.Pitch * GFramebuffer.Height;
+    SysDeviceAddResource(Display, SYSDEV_RES_MMIO,
+                         GFramebuffer.PhysAddr, FbSize);
+
+    // --- Свойства ---
+
+    SysDeviceSetPropU32(Display, "width",  GFramebuffer.Width);
+    SysDeviceSetPropU32(Display, "height", GFramebuffer.Height);
+    SysDeviceSetPropU32(Display, "pitch",  GFramebuffer.Pitch);
+    SysDeviceSetPropU32(Display, "bpp",    GFramebuffer.Bpp);
+    SysDeviceSetPropU32(Display, "bytes_per_pixel",
+                        GFramebuffer.BytesPerPixel);
+    SysDeviceSetProp(Display, "format",
+                     FramebufferFormatToString(GFramebuffer.Format));
+    SysDeviceSetPropHex(Display, "phys_addr", GFramebuffer.PhysAddr);
+    SysDeviceSetPropHex(Display, "virt_addr",
+                        (UINT64)(UINTPTR)GFramebuffer.VirtAddr);
+    SysDeviceSetPropU32(Display, "layers", GFramebuffer.LayerCount);
+    SysDeviceSetPropU64(Display, "size_bytes", FbSize);
+
+    // --- Привязка к KDriver ---
+
+    KDriver *Drv = KDriverFindByName("Framebuffer");
+    if (Drv) {
+        SysDeviceBindDriver(Display, Drv);
+    } else {
+        SysDeviceSetState(Display, SYSDEV_STATE_ENABLED);
+    }
+
+    return Display;
 }

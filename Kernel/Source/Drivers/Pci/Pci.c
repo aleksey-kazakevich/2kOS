@@ -1,6 +1,8 @@
+#include <Drivers/Acpi/Acpi.h>
 #include <Mem/Allocator.h>
 #include <Drivers/Pci.h>
 #include <Lib/String.h>
+#include <Lib/StdIo.h>
 #include <KDriver.h>
 #include <Asm/Io.h>
 #include <Return.h>
@@ -11,7 +13,8 @@ UINT32 PciReadAddr(UINT8 Bus, UINT8 Slot, UINT8 Func, UINT8 Offset);
 
 // ==================== GLOBAL VARIABLES ====================
 PciDevice* PciDevices = NULLPTR;
-static INT DeviceCount = 0;
+STATIC INT DeviceCount = 0;
+STATIC SysDevice *GPciSysRoot = NULLPTR;
 
 // ==================== BASIC OPERATIONS ====================
 
@@ -27,7 +30,7 @@ UINT32 PciReadAddr(UINT8 Bus, UINT8 Slot, UINT8 Func, UINT8 Offset) {
 }
 
 // Formation of address
-static UINT32 PciMakeAddr(UINT8 Bus, UINT8 Slot, UINT8 Func, UINT8 Offset) {
+STATIC UINT32 PciMakeAddr(UINT8 Bus, UINT8 Slot, UINT8 Func, UINT8 Offset) {
     return (1u << 31) | (Bus << 16) | (Slot << 11) | (Func << 8) | (Offset & 0xFC);
 }
 
@@ -75,7 +78,7 @@ UINT8 PciFindCap(PciDevice *Dev, UINT8 CapId) {
 }
 
 // PCIe detection
-static VOID PciDetectPciE(PciDevice *Dev) {
+STATIC VOID PciDetectPciE(PciDevice *Dev) {
     Dev->PciECapOffset = PciFindCap(Dev, 0x10); // PCIe Capability ID
     
     if (!Dev->PciECapOffset) {
@@ -106,7 +109,7 @@ static VOID PciDetectPciE(PciDevice *Dev) {
 }
 
 // Detecting BAR registers
-static VOID PciDetectBars(PciDevice *Dev) {
+STATIC VOID PciDetectBars(PciDevice *Dev) {
     // Save the team
     UINT16 SavedCmd = Dev->Command;
     PciWrite(Dev, 0x04, SavedCmd & ~0x07); // Disable I/O and Memory
@@ -177,7 +180,7 @@ static VOID PciDetectBars(PciDevice *Dev) {
 }
 
 // Single device discovery
-static PciDevice* PciProbe(UINT8 Bus, UINT8 Slot, UINT8 Func) {
+STATIC PciDevice* PciProbe(UINT8 Bus, UINT8 Slot, UINT8 Func) {
     UINT16 Vendor = PciReadVendor(Bus, Slot, Func);
     if (Vendor == PCI_INVALID_VENDOR) return NULLPTR;
     
@@ -228,7 +231,7 @@ static PciDevice* PciProbe(UINT8 Bus, UINT8 Slot, UINT8 Func) {
 }
 
 // Scan function
-static VOID PciScanFunction(UINT8 Bus, UINT8 Slot, UINT8 Func) {
+STATIC VOID PciScanFunction(UINT8 Bus, UINT8 Slot, UINT8 Func) {
     PciProbe(Bus, Slot, Func);
     
     // If this is a PCI-to-PCI bridge, scan the secondary bus
@@ -242,7 +245,7 @@ static VOID PciScanFunction(UINT8 Bus, UINT8 Slot, UINT8 Func) {
 }
 
 // Scan your device
-static VOID PciScanDevice(UINT8 Bus, UINT8 Slot) {
+STATIC VOID PciScanDevice(UINT8 Bus, UINT8 Slot) {
     // Checking function 0
     if (PciReadVendor(Bus, Slot, 0) == PCI_INVALID_VENDOR) return;
     
@@ -286,6 +289,8 @@ VOID PciInit(VOID) {
     }
 
     KDriverRegister(KDriverGenerateStruct("PCI", DCL0, TRUE, NULLPTR, NULLPTR));
+
+    PciRegisterSysDevices();
 }
 
 INT PciScan(VOID) {
@@ -510,5 +515,211 @@ UINT32 PciGetCount(VOID) {
         Count++;
         Dev = Dev->Next;
     }
+    return Count;
+}
+
+SysDevice *PciGetSysDevice(VOID) {
+    return GPciSysRoot;
+}
+STATIC VOID PciMakeSysName(PciDevice *Dev, CHAR *Out, USIZE OutSize) {
+    SnPrintf(Out, OutSize, "PCI/%02X:%02X.%X",
+             Dev->Bus, Dev->Slot, Dev->Function);
+}
+
+// Формирует описание из класса.
+STATIC VOID PciMakeSysDesc(PciDevice *Dev, CHAR *Out, USIZE OutSize) {
+    const CHAR *VendorName = PciVendorName(Dev->VendorId);
+    const CHAR *ClassName = PciClassName(Dev->ClassCode, Dev->SubClass);
+    SnPrintf(Out, OutSize, "%s %s", VendorName, ClassName);
+}
+
+// ----------------------------------------------------------------------------
+// Добавление ресурсов из BAR
+// ----------------------------------------------------------------------------
+
+STATIC VOID PciAddBarResources(SysDevice *Sd, PciDevice *Dev) {
+    for (INT I = 0; I < 6; I++) {
+        if (Dev->Bars[I] == 0 || Dev->BarSizes[I] == 0) continue;
+
+        // Определяем тип ресурса
+        SysDeviceResType ResType;
+        if (Dev->BarTypes[I] == 2) {
+            ResType = SYSDEV_RES_IO;   // I/O ports
+        } else {
+            ResType = SYSDEV_RES_MMIO; // Memory-mapped
+        }
+
+        SysDeviceAddResource(Sd, ResType,
+                             Dev->Bars[I],
+                             Dev->BarSizes[I]);
+
+        // Дополнительно сохраняем как проперти для удобства
+        CHAR Key[16];
+        SnPrintf(Key, sizeof(Key), "bar%d", I);
+        SysDeviceSetPropHex(Sd, Key, Dev->Bars[I]);
+
+        SnPrintf(Key, sizeof(Key), "bar%d_size", I);
+        SysDeviceSetPropHex(Sd, Key, Dev->BarSizes[I]);
+
+        SnPrintf(Key, sizeof(Key), "bar%d_type", I);
+        const CHAR *TypeStr =
+            (Dev->BarTypes[I] == 2) ? "io" :
+            (Dev->BarTypes[I] == 1) ? "mmio64" : "mmio32";
+        SysDeviceSetProp(Sd, Key, TypeStr);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Регистрация одного PCI-устройства
+// ----------------------------------------------------------------------------
+
+STATIC VOID PciRegisterOne(PciDevice *Dev) {
+    if (!Dev || !GPciSysRoot) return;
+
+    CHAR Name[SYSDEV_NAME_MAX];
+    CHAR Desc[SYSDEV_NAME_MAX];
+    PciMakeSysName(Dev, Name, sizeof(Name));
+    PciMakeSysDesc(Dev, Desc, sizeof(Desc));
+
+    SysDevice *Sd = SysDeviceCreate(GPciSysRoot, Name, Desc,
+                                     SYSDEV_TYPE_UNKNOWN);
+    if (!Sd) return;
+
+    // --- Свойства (идентификация) ---
+
+    SysDeviceSetPropHex(Sd, "vendor", Dev->VendorId);
+    SysDeviceSetPropHex(Sd, "device", Dev->DeviceId);
+    SysDeviceSetPropHex(Sd, "revision", Dev->RevisionId);
+    SysDeviceSetPropHex(Sd, "class",
+                        ((UINT32)Dev->ClassCode << 8) | Dev->SubClass);
+    SysDeviceSetPropHex(Sd, "prog_if", Dev->ProgIf);
+
+    SysDeviceSetProp(Sd, "vendor_name",
+                     PciVendorName(Dev->VendorId));
+    SysDeviceSetProp(Sd, "class_name",
+                     PciClassName(Dev->ClassCode, Dev->SubClass));
+
+    // Позиция на шине
+    SysDeviceSetPropU32(Sd, "bus", Dev->Bus);
+    SysDeviceSetPropU32(Sd, "slot", Dev->Slot);
+    SysDeviceSetPropU32(Sd, "func", Dev->Function);
+
+    // --- IRQ ---
+
+    if (Dev->InterruptPin != 0 && Dev->InterruptLine != 0 &&
+        Dev->InterruptLine != 0xFF) {
+        SysDeviceAddResource(Sd, SYSDEV_RES_IRQ,
+                             Dev->InterruptLine, 1);
+        SysDeviceSetPropU32(Sd, "irq", Dev->InterruptLine);
+        SysDeviceSetPropU32(Sd, "irq_pin", Dev->InterruptPin);
+    }
+
+    // --- BARs ---
+
+    PciAddBarResources(Sd, Dev);
+
+    // --- PCIe специфика ---
+
+    SysDeviceSetPropU32(Sd, "pcie", Dev->IsPciE ? 1 : 0);
+
+    if (Dev->IsPciE) {
+        SysDeviceSetProp(Sd, "pcie_type", PciETypeName(Dev));
+        SysDeviceSetPropU32(Sd, "link_speed", Dev->LinkSpeed);
+        SysDeviceSetPropU32(Sd, "link_width", Dev->LinkWidth);
+        SysDeviceSetPropU32(Sd, "max_link_speed", Dev->MaxLinkSpeed);
+        SysDeviceSetPropU32(Sd, "max_link_width", Dev->MaxLinkWidth);
+        SysDeviceSetPropU32(Sd, "pcie_version", Dev->PciEVersion);
+    }
+
+    // --- MSI / MSI-X ---
+
+    SysDeviceSetPropU32(Sd, "msi_cap",
+                        Dev->MsiCapOffset ? 1 : 0);
+    SysDeviceSetPropU32(Sd, "msix_cap",
+                        Dev->MsiXCapOffset ? 1 : 0);
+    SysDeviceSetPropU32(Sd, "msi_enabled",
+                        Dev->MsiEnabled ? 1 : 0);
+    SysDeviceSetPropU32(Sd, "msix_enabled",
+                        Dev->MsiXEnabled ? 1 : 0);
+
+    // --- Привязка к KDriver ---
+
+    // Пытаемся найти драйвер по классу
+    KDriver *Drv = NULLPTR;
+
+    // IDE controller (01:01)
+    if (Dev->ClassCode == 0x01 && Dev->SubClass == 0x01) {
+        Drv = KDriverFindByName("PataDisk");
+    }
+    // SATA controller (01:06)
+    else if (Dev->ClassCode == 0x01 && Dev->SubClass == 0x06) {
+        Drv = KDriverFindByName("SataDisk");
+    }
+    // VGA/Display (03:xx)
+    else if (Dev->ClassCode == 0x03) {
+        Drv = KDriverFindByName("Framebuffer");
+    }
+    // Host Bridge (06:00) — сам PCI драйвер
+    else if (Dev->ClassCode == 0x06 && Dev->SubClass == 0x00) {
+        Drv = KDriverFindByName("PCI");
+    }
+
+    if (Drv) {
+        SysDeviceBindDriver(Sd, Drv);
+    } else {
+        SysDeviceSetState(Sd, SYSDEV_STATE_PRESENT);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Публичная регистрация
+// ----------------------------------------------------------------------------
+
+UINT32 PciRegisterSysDevices(VOID) {
+    if (!SysDeviceGetRoot()) {
+        return 0;
+    }
+
+    // Создаём PCI0, если ещё не создан
+    if (!GPciSysRoot) {
+        // Пытаемся положить PCI0 под ACPI (правильная иерархия)
+        // Если ACPI нет — под root.
+        SysDevice *Parent = AcpiGetSysDevice();
+        if (!Parent) Parent = SysDeviceGetRoot();
+
+        GPciSysRoot = SysDeviceCreate(Parent,
+                                       "PCI0",
+                                       "PCI Express bus",
+                                       SYSDEV_TYPE_BUS);
+        if (!GPciSysRoot) return 0;
+
+        SysDeviceSetPropU32(GPciSysRoot, "device_count",
+                            PciGetCount());
+        SysDeviceSetState(GPciSysRoot, SYSDEV_STATE_ENABLED);
+
+        // Привязка к KDriver PCI
+        KDriver *Drv = KDriverFindByName("PCI");
+        if (Drv) SysDeviceBindDriver(GPciSysRoot, Drv);
+    }
+
+    // Регистрируем все устройства
+    UINT32 Count = 0;
+    PciDevice *Dev = PciGetFirst();
+    while (Dev) {
+        // Пропускаем, если уже зарегистрировано
+        CHAR Name[SYSDEV_NAME_MAX];
+        PciMakeSysName(Dev, Name, sizeof(Name));
+
+        if (!SysDeviceFind(Name)) {
+            PciRegisterOne(Dev);
+            Count++;
+        }
+
+        Dev = PciGetNext(Dev);
+    }
+
+    // Обновляем счётчик
+    SysDeviceSetPropU32(GPciSysRoot, "device_count", PciGetCount());
+
     return Count;
 }

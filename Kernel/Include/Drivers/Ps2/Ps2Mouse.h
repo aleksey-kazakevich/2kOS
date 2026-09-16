@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Drivers/Ps2/Ps2.h>
+#include <SysDevice.h>
 #include <KDriver.h>
 #include <Types.h>
 
@@ -110,3 +111,5 @@ INT Ps2MouseUnsubscribe(MouseCallback Cb);
 INT Ps2MouseDispatchEvents(VOID);
 
 VOID Ps2MouseHandleIRQ(VOID);
+
+SysDevice *Ps2MouseRegisterSysDevice(VOID);

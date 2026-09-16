@@ -10,7 +10,7 @@
 // Paging status
 // ============================================================================
 
-static PagingState GPagingState = {
+STATIC PagingState GPagingState = {
     .Level = PAGING_LEVEL_4,
     .RootTable = NULLPTR,
     .Initialized = FALSE
@@ -20,7 +20,7 @@ static PagingState GPagingState = {
 // Helper functions for working with tables
 // ============================================================================
 
-static UINT64 *AllocTablePage(UINT64 *PhysOut) {
+STATIC UINT64 *AllocTablePage(UINT64 *PhysOut) {
     VOID *Phys = PhysAllocAllocatePage(PhysAllocGet());
     if (!Phys)
         return NULLPTR;
@@ -33,7 +33,7 @@ static UINT64 *AllocTablePage(UINT64 *PhysOut) {
     return Virt;
 }
 
-static UINT64* GetNextLevel(UINT64 *Table, UINT64 Index, UINT64 Flags, BOOL Allocate) {
+STATIC UINT64* GetNextLevel(UINT64 *Table, UINT64 Index, UINT64 Flags, BOOL Allocate) {
     UINT64 Entry = Table[Index];
     UINT64 Walk = (Flags & (PTE_PRESENT | PTE_WRITABLE | PTE_USER)) | PTE_PRESENT | PTE_WRITABLE;
 
@@ -102,7 +102,7 @@ VOID PagingInit(VOID) {
     }
     
     // Enable CPU features
-    CpuEnableSmepSmap();
+    CpuEnableSmep();
     CpuEnableUmip();
     if (CpuHasAvx()) CpuEnableXsave();
     
@@ -391,4 +391,26 @@ INT PagingMapUserRegion(UINT64 *RootTable, VOID *Addr, USIZE Size) {
 
 VOID PagingUnmapUserRegion(UINT64 *RootTable, VOID *Addr, USIZE Size) {
     PagingUnmapRange(RootTable, (UINT64)Addr, Size);
+}
+
+INT PagingCopyFromUser(UINT64 *RootTable, VOID *Dest, UINT64 Src, USIZE Size) {
+    if (!RootTable || !Dest || Size == 0) RETURN(INCORRECT_VALUE);
+
+    UINT8 *D = (UINT8 *)Dest;
+
+    while (Size) {
+        UINT64 Phys = PagingLookupVirt(RootTable, Src);
+        if (!Phys) RETURN(NO_OBJECT);
+
+        UINT64 Off = Src & (PAGE_SIZE - 1);
+        USIZE Chunk = PAGE_SIZE - Off;
+        if (Chunk > Size) Chunk = Size;
+
+        MemCpy(D, (const VOID *)PhysToVirt(Phys), Chunk);
+        D += Chunk;
+        Src += Chunk;
+        Size -= Chunk;
+    }
+
+    RETURN(SUCCESS);
 }

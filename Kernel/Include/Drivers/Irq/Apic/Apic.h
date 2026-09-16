@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Drivers/Irq/Apic/ApicRegs.h>
+#include <SysDevice.h>
 #include <Types.h>
 
 // ============================================================================
@@ -38,3 +39,5 @@ UINT32 ApicFormatDestination(UINT32 ApicId);
 
 // Checking X2APIC support
 BOOL ApicCpuSupportsX2Apic(VOID);
+
+SysDevice *ApicRegisterSysDevice(VOID);

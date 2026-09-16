@@ -12,7 +12,7 @@
 // ============================================================================
 
 // Pointer mask: 1 — black outline, 0 — inner fill
-static const UINT16 CursorData[16] = {
+STATIC const UINT16 CursorData[16] = {
     0b1100000000000000,  // ██░░░░░░░░░
     0b1110000000000000,  // ███░░░░░░░░
     0b1111000000000000,  // ████░░░░░░░
@@ -47,7 +47,7 @@ typedef struct {
     UINT32 OutlineColor;     // Outline color
 } MouseCursorState;
 
-static MouseCursorState GCursor = {
+STATIC MouseCursorState GCursor = {
     .X = 100,
     .Y = 100,
     .Width = 11,
@@ -63,7 +63,7 @@ static MouseCursorState GCursor = {
 // RENDERING CURSOR TO BUFFER (WITH Stroke) - 16x16
 // ============================================================================
 
-static VOID RenderCursor(VOID) {
+STATIC VOID RenderCursor(VOID) {
     if (!GCursor.Visible || !GCursor.Buffer) return;
     
     UINT32 *Buf = GCursor.Buffer;
@@ -125,7 +125,7 @@ static VOID RenderCursor(VOID) {
     }
 }
 
-static VOID UpdateCursor(VOID) {
+STATIC VOID UpdateCursor(VOID) {
     if (!GCursor.Initialized) return;
     
     // First we render to the buffer

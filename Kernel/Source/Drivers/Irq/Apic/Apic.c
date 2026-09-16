@@ -1,5 +1,6 @@
 #include <Drivers/Irq/Apic/Apic.h>
 #include <Limine/LimineParse.h>
+#include <Drivers/Acpi/Acpi.h>
 #include <Mem/Paging.h>
 #include <Asm/Mmio.h>
 #include <Asm/Cpu.h>
@@ -10,7 +11,7 @@
 // Global State
 // ============================================================================
 
-static struct {
+STATIC struct {
     UINT32 Base;
     volatile VOID *Virt;
     BOOL Enabled;
@@ -23,15 +24,15 @@ static struct {
 // Internal Helpers
 // ============================================================================
 
-static BOOL ApicBaseIsEnabled(VOID) {
+STATIC BOOL ApicBaseIsEnabled(VOID) {
     return (ReadMSR(IA32_APIC_BASE_MSR) & APIC_BASE_ENABLE) != 0;
 }
 
-static BOOL ApicBaseIsX2Apic(VOID) {
+STATIC BOOL ApicBaseIsX2Apic(VOID) {
     return (ReadMSR(IA32_APIC_BASE_MSR) & APIC_BASE_X2APIC) != 0;
 }
 
-static BOOL ApicTransitionToX2Apic(VOID) {
+STATIC BOOL ApicTransitionToX2Apic(VOID) {
     UINT64 Base = ReadMSR(IA32_APIC_BASE_MSR);
 
     if (Base & APIC_BASE_X2APIC) {
@@ -52,30 +53,30 @@ static BOOL ApicTransitionToX2Apic(VOID) {
     return (ReadMSR(IA32_APIC_BASE_MSR) & APIC_BASE_X2APIC) != 0;
 }
 
-static UINT32 ApicOffsetToMsr(UINT32 Reg) {
+STATIC UINT32 ApicOffsetToMsr(UINT32 Reg) {
     return X2APIC_MSR_BASE + (Reg >> 4);
 }
 
-static BOOL ApicIsIcrReg(UINT32 Reg) {
+STATIC BOOL ApicIsIcrReg(UINT32 Reg) {
     return Reg == LAPIC_ICR_LOW || Reg == LAPIC_ICR_HIGH;
 }
 
-static UINT64 ApicReadIcr(VOID) {
+STATIC UINT64 ApicReadIcr(VOID) {
     return ReadMSR(X2APIC_MSR_ICR);
 }
 
-static VOID ApicWriteIcr(UINT64 Value) {
+STATIC VOID ApicWriteIcr(UINT64 Value) {
     WriteMSR(X2APIC_MSR_ICR, Value);
 }
 
-static BOOL ApicIcrIsPending(VOID) {
+STATIC BOOL ApicIcrIsPending(VOID) {
     if (GApic.X2ApicMode) {
         return (ApicReadIcr() & ICR_DELIVERY_PENDING) != 0;
     }
     return (MmioRead32(GApic.Virt + LAPIC_ICR_LOW) & ICR_DELIVERY_PENDING) != 0;
 }
 
-static VOID ApicWaitIcr(VOID) {
+STATIC VOID ApicWaitIcr(VOID) {
     INT Timeout = 100000;
     while (ApicIcrIsPending() && Timeout--) {
         CpuPause();
@@ -107,7 +108,7 @@ UINT32 ApicFormatDestination(UINT32 ApicId) {
     return ApicId << 24;
 }
 
-static INT ApicMapMmio(UINT32 PhysBase) {
+STATIC INT ApicMapMmio(UINT32 PhysBase) {
     // We use the address in the upper half (PML4 slot 511)
     // 0xFFFFFFFFFEE00000 -> PML4_INDEX_4 = 511
     UINT64 VirtBase = 0xFFFFFFFFFEE00000ULL;
@@ -182,6 +183,10 @@ INT ApicInit(VOID) {
     
     // Caching ID
     GApic.Id = ApicGetId();
+
+    KDriverRegister(KDriverGenerateStruct("LAPIC", 0, TRUE, NULLPTR, NULLPTR));
+
+    ApicRegisterSysDevice();
     
     RETURN(SUCCESS);
 }
@@ -359,4 +364,73 @@ VOID ApicSendStartup(UINT32 ApicId, UINT32 Vector) {
     ApicWriteReg(LAPIC_ICR_HIGH, ApicId << 24);
     ApicWriteReg(LAPIC_ICR_LOW, (Vector & 0xFF) | DELIVERY_STARTUP | ICR_DEST_PHYSICAL);
     ApicWaitIcr();
+}
+
+STATIC const CHAR *ApicGetNodeName(VOID) {
+    return GApic.X2ApicMode ? "X2APIC" : "LAPIC";
+}
+
+SysDevice *ApicRegisterSysDevice(VOID) {
+    const CHAR *Name = ApicGetNodeName();
+
+    // Проверяем, что уже не зарегистрирован
+    SysDevice *Existing = SysDeviceFind(Name);
+    if (Existing) return Existing;
+
+    // Родитель — ACPI bus, если есть. Иначе — root.
+    SysDevice *Parent = AcpiGetSysDevice();
+    if (!Parent) Parent = SysDeviceGetRoot();
+    if (!Parent) return NULLPTR;
+
+    SysDevice *Dev = SysDeviceCreate(Parent,
+                                      Name,
+                                      GApic.X2ApicMode ?
+                                          "Local x2APIC" :
+                                          "Local APIC",
+                                      SYSDEV_TYPE_INTERRUPT);
+    if (!Dev) return NULLPTR;
+
+    // --- Ресурсы ---
+
+    // MMIO регион — только в xAPIC режиме. В x2APIC доступ через MSR.
+    if (!GApic.X2ApicMode && GApic.Base) {
+        SysDeviceAddResource(Dev, SYSDEV_RES_MMIO, GApic.Base, 0x400);
+    }
+
+    // --- Свойства ---
+
+    SysDeviceSetPropU32(Dev, "id", GApic.Id);
+    SysDeviceSetPropU32(Dev, "version", GApic.Version);
+    SysDeviceSetPropU32(Dev, "enabled", GApic.Enabled ? 1 : 0);
+    SysDeviceSetPropU32(Dev, "x2apic", GApic.X2ApicMode ? 1 : 0);
+
+    if (GApic.X2ApicMode) {
+        SysDeviceSetProp(Dev, "access", "msr");
+    } else {
+        SysDeviceSetProp(Dev, "access", "mmio");
+        if (GApic.Base) {
+            SysDeviceSetPropHex(Dev, "mmio_base", GApic.Base);
+        }
+        if (GApic.Virt) {
+            SysDeviceSetPropHex(Dev, "virt_base",
+                                (UINT64)(UINTPTR)GApic.Virt);
+        }
+    }
+
+    // Ссылка на ACPI Local APIC Address (из MADT)
+    UINT32 AcpiLocalApic = AcpiGetLocalApicAddr();
+    if (AcpiLocalApic) {
+        SysDeviceSetPropHex(Dev, "acpi_lapic_addr", AcpiLocalApic);
+    }
+
+    // --- Привязка к KDriver ---
+
+    KDriver *Drv = KDriverFindByName("APIC");
+    if (Drv) {
+        SysDeviceBindDriver(Dev, Drv);
+    } else {
+        SysDeviceSetState(Dev, SYSDEV_STATE_ENABLED);
+    }
+
+    return Dev;
 }

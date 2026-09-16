@@ -97,3 +97,8 @@ INT SchedulerKill(int Pid);
 INT SchedulerKillCurrent(VOID);
 BOOL IsAddressInUserSpace(UINT64 Addr);
 BOOL IsCurrentFromUser(VOID);
+
+INT UserTaskCreateFromPageTable(UINT64 *Pml4,
+                                 UINT64 Entry,
+                                 UINT64 UserSp,
+                                 const CHAR *Name);

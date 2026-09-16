@@ -1,5 +1,6 @@
 #pragma once
 
+#include <SysDevice.h>
 #include <Types.h>
 #include <List.h>
 
@@ -8,6 +9,8 @@ typedef enum {
     DISK_TYPE_SATA,
     DISK_TYPE_NVME,
     DISK_TYPE_USB,
+    DISK_TYPE_RAM,
+    DISK_TYPE_OPTICAL,
     DISK_TYPE_UNKNOWN
 } DiskType;
 
@@ -25,11 +28,13 @@ typedef enum {
     PARTITION_TYPE_EXTENDED
 } PartitionType;
 
+#define DRIVE_NAME_MAX 32
+
 typedef struct Partition {
     ListHead Node;
     
     // --- Name ---
-    CHAR Name[32];              // For example: "IDE0:2"
+    CHAR Name[DRIVE_NAME_MAX];  // For example: "IDE0:2"
     UINT32 Index;               // 1-based for user
     
     // --- Physical parameters ---
@@ -88,6 +93,7 @@ VOID DiskMgrInit(VOID);
 
 // --- Disc registration ---
 INT DiskMgrRegisterDisk(Disk *Disk);
+INT DiskMgrUnregisterDisk(Disk *Disk);
 
 // --- Search ---
 Disk* DiskMgrFindDisk(const CHAR *Name);
@@ -130,3 +136,10 @@ const CHAR* PartitionIdToString(UINT8 Id);
 // Create disk name
 VOID DiskMakeName(Disk *Disk);
 VOID DiskMgrInitDisks(VOID);
+
+// Регистрация всех дисков (и их разделов) в SysDevice.
+UINT32 DiskMgrRegisterSysDevices(VOID);
+
+// Получить SysDevice* корневого узла DRIVE.
+// Возвращает NULLPTR, если регистрация ещё не производилась.
+SysDevice *DiskMgrGetSysDevice(VOID);

@@ -3,20 +3,20 @@
 #include <Types.h>
 
 // Absolute value for integers
-static inline INT Abs(INT N) {
+STATIC INLINE INT Abs(INT N) {
     return (N < 0) ? -N : N;
 }
 
-static inline LONG LAbs(LONG N) {
+STATIC INLINE LONG LAbs(LONG N) {
     return (N < 0) ? -N : N;
 }
 
-static inline INT64 LLAbs(INT64 N) {
+STATIC INLINE INT64 LLAbs(INT64 N) {
     return (N < 0) ? -N : N;
 }
 
 // Absolute value for floating point numbers
-static inline FLOAT FAbsF(FLOAT X) {
+STATIC INLINE FLOAT FAbsF(FLOAT X) {
     union {
         FLOAT F;
         UINT32 I;
@@ -25,7 +25,7 @@ static inline FLOAT FAbsF(FLOAT X) {
     return U.F;
 }
 
-static inline DOUBLE FAbs(DOUBLE X) {
+STATIC INLINE DOUBLE FAbs(DOUBLE X) {
     union {
         DOUBLE D;
         UINT64 I;
@@ -38,18 +38,18 @@ static inline DOUBLE FAbs(DOUBLE X) {
 #define CLAMP(X, Min, Max) ((X) < (Min) ? (Min) : ((X) > (Max) ? (Max) : (X)))
 
 // Number sign
-static inline INT Sign(INT X) {
+STATIC INLINE INT Sign(INT X) {
     return (X > 0) - (X < 0);
 }
 
-static inline INT SignF(FLOAT X) {
+STATIC INLINE INT SignF(FLOAT X) {
     return (X > 0.0f) - (X < 0.0f);
 }
 
 
 // Square root (sqrt)
 // Fast inverse square root (for float)
-static inline FLOAT InvSqrtF(FLOAT X) {
+STATIC INLINE FLOAT InvSqrtF(FLOAT X) {
     FLOAT XHalf = 0.5f * X;
     INT I = *(INT*)&X;
     I = 0x5f3759df - (I >> 1);
@@ -59,7 +59,7 @@ static inline FLOAT InvSqrtF(FLOAT X) {
 }
 
 // Square root for float (Newton's method)
-static inline FLOAT SqrtF(FLOAT X) {
+STATIC INLINE FLOAT SqrtF(FLOAT X) {
     if (X <= 0.0f) return 0.0f;
     
     FLOAT Guess = X;
@@ -76,7 +76,7 @@ static inline FLOAT SqrtF(FLOAT X) {
 }
 
 // Square root for double
-static inline DOUBLE Sqrt(DOUBLE X) {
+STATIC INLINE DOUBLE Sqrt(DOUBLE X) {
     if (X <= 0.0) return 0.0;
     
     DOUBLE Guess = X;
@@ -92,7 +92,7 @@ static inline DOUBLE Sqrt(DOUBLE X) {
 }
 
 // Square root for integers (integer)
-static inline UINT32 ISqrt(UINT32 X) {
+STATIC INLINE UINT32 ISqrt(UINT32 X) {
     if (X <= 1) return X;
     
     UINT32 Guess = X / 2;
@@ -112,7 +112,7 @@ static inline UINT32 ISqrt(UINT32 X) {
 //=============================================================================
 
 // Fast exponentiation (integer)
-static inline INT IPow(INT Base, INT Exp) {
+STATIC INLINE INT IPow(INT Base, INT Exp) {
     INT Result = 1;
     while (Exp > 0) {
         if (Exp & 1) Result *= Base;
@@ -123,7 +123,7 @@ static inline INT IPow(INT Base, INT Exp) {
 }
 
 // Degree for float
-static inline FLOAT PowF(FLOAT Base, INT Exp) {
+STATIC INLINE FLOAT PowF(FLOAT Base, INT Exp) {
     FLOAT Result = 1.0f;
     INT Negative = (Exp < 0);
     
@@ -139,7 +139,7 @@ static inline FLOAT PowF(FLOAT Base, INT Exp) {
 }
 
 // Trigonometric functions (Taylor series approximation)
-static inline FLOAT SinF(FLOAT X) {
+STATIC INLINE FLOAT SinF(FLOAT X) {
     // Reducing the angle to [-π, π]
     const FLOAT Pi = 3.14159265f;
     const FLOAT TwoPi = 2.0f * Pi;
@@ -156,7 +156,7 @@ static inline FLOAT SinF(FLOAT X) {
     return X - X3 / 6.0f + X5 / 120.0f - X7 / 5040.0f;
 }
 
-static inline FLOAT CosF(FLOAT X) {
+STATIC INLINE FLOAT CosF(FLOAT X) {
     // Reducing the angle to [-π, π]
     const FLOAT Pi = 3.14159265f;
     const FLOAT TwoPi = 2.0f * Pi;
@@ -172,12 +172,12 @@ static inline FLOAT CosF(FLOAT X) {
     return 1.0f - X2 / 2.0f + X4 / 24.0f - X6 / 720.0f;
 }
 
-static inline FLOAT TanF(FLOAT X) {
+STATIC INLINE FLOAT TanF(FLOAT X) {
     return SinF(X) / CosF(X);
 }
 
 //Exponent and logarithms
-static inline FLOAT ExpF(FLOAT X) {
+STATIC INLINE FLOAT ExpF(FLOAT X) {
     FLOAT Result = 1.0f;
     FLOAT Term = 1.0f;
     
@@ -190,7 +190,7 @@ static inline FLOAT ExpF(FLOAT X) {
     return Result;
 }
 
-static inline FLOAT LogF(FLOAT X) {
+STATIC INLINE FLOAT LogF(FLOAT X) {
     if (X <= 0.0f) return -1.0f;
     
     // Natural logarithm via approximation
@@ -208,7 +208,7 @@ static inline FLOAT LogF(FLOAT X) {
     return LogM + Exponent * Log2;
 }
 
-static FLOAT ATan2F(FLOAT Y, FLOAT X) {
+STATIC FLOAT ATan2F(FLOAT Y, FLOAT X) {
     if (X == 0.0f) {
         if (Y > 0) return 1.57079633f;
         if (Y < 0) return -1.57079633f;
@@ -233,7 +233,7 @@ static FLOAT ATan2F(FLOAT Y, FLOAT X) {
     return Angle;
 }
 
-static FLOAT ACosF(FLOAT X) {
+STATIC FLOAT ACosF(FLOAT X) {
     if (X >= 1.0f) return 0.0f;
     if (X <= -1.0f) return 3.14159265f;
     

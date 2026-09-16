@@ -88,7 +88,7 @@ typedef struct {
 // Functions to check support
 // ============================================================================
 
-static inline BOOL CpuSupports5LevelPaging(VOID) {
+STATIC INLINE BOOL CpuSupports5LevelPaging(VOID) {
     UINT32 Eax, Ebx, Ecx, Edx;
     
     // Checking max CPUID level
@@ -102,7 +102,7 @@ static inline BOOL CpuSupports5LevelPaging(VOID) {
     return (Ecx & (1 << 16)) != 0;
 }
 
-static inline BOOL CpuSupports4LevelPaging(VOID) {
+STATIC INLINE BOOL CpuSupports4LevelPaging(VOID) {
     // All x86_64 processors support 4-level paging
     return TRUE;
 }
@@ -111,21 +111,21 @@ static inline BOOL CpuSupports4LevelPaging(VOID) {
 // Address translation functions (unchanged)
 // ============================================================================
 
-static inline UINT64 PhysToVirt(UINT64 Phys) {
+STATIC INLINE UINT64 PhysToVirt(UINT64 Phys) {
     UINT64 HhdmOffset = LimineGetHHDMOffset();
     return Phys + HhdmOffset;
 }
 
-static inline UINT64 VirtToPhys(UINT64 Virt) {
+STATIC INLINE UINT64 VirtToPhys(UINT64 Virt) {
     UINT64 HhdmOffset = LimineGetHHDMOffset();
     return Virt - HhdmOffset;
 }
 
-static inline VOID* PhysToVirtPtr(VOID *Phys) {
+STATIC INLINE VOID* PhysToVirtPtr(VOID *Phys) {
     return (VOID*)PhysToVirt((UINT64)Phys);
 }
 
-static inline VOID* VirtToPhysPtr(VOID *Virt) {
+STATIC INLINE VOID* VirtToPhysPtr(VOID *Virt) {
     return (VOID*)VirtToPhys((UINT64)Virt);
 }
 
@@ -155,10 +155,12 @@ INT PagingMapUserRegion(UINT64 *RootTable, VOID *Addr, USIZE Size);
 VOID PagingUnmapUserRegion(UINT64 *RootTable, VOID *Addr, USIZE Size);
 
 // Auxiliary functions for working with the level
-static inline BOOL PagingIs5Level(VOID) {
+STATIC INLINE BOOL PagingIs5Level(VOID) {
     return PagingGetLevel() == PAGING_LEVEL_5;
 }
 
-static inline BOOL PagingIs4Level(VOID) {
+STATIC INLINE BOOL PagingIs4Level(VOID) {
     return PagingGetLevel() == PAGING_LEVEL_4;
 }
+
+INT PagingCopyFromUser(UINT64 *RootTable, VOID *Dest, UINT64 Src, USIZE Size);

@@ -282,15 +282,15 @@ INT StrCmp(const CHAR *A, const CHAR *B)
     return *(UINT8 *)A - *(UINT8 *)B;
 }
 
-static CHAR StrCaseFold(CHAR C) {
+STATIC CHAR StrCaseFold(CHAR C) {
     if (C >= 'A' && C <= 'Z') {
         return (CHAR)(C + ('a' - 'A'));
     }
     return C;
 }
 
-INT StrCaseCmp(const CHAR *A, const CHAR *B)
-{
+INT StrCaseCmp(const CHAR *A, const CHAR *B) {
+    if (!A || !B) return (A == B) ? 0 : (A ? 1 : -1);
     while (StrCaseFold(*A) == StrCaseFold(*B) && *A != '\0')
     {
         A++;
@@ -404,7 +404,7 @@ INT NameEq(const CHAR *A, const CHAR *B, USIZE N)
     return 1;
 }
 
-static CHAR* IToA(INT Value, CHAR* Str, INT Base) {
+STATIC CHAR* IToA(INT Value, CHAR* Str, INT Base) {
     CHAR* Ptr = Str;
     CHAR* Ptr1 = Str;
     CHAR TmpChar;
@@ -563,4 +563,33 @@ CHAR *StrDup(const CHAR *S) {
 
     MemCpy(Dup, S, Len);
     return Dup;
+}
+
+STATIC UINT8 CharToHexDigit(CHAR C) {
+    if (C >= '0' && C <= '9') return (UINT8)(C - '0');
+    if (C >= 'A' && C <= 'F') return (UINT8)(C - 'A' + 10);
+    if (C >= 'a' && C <= 'f') return (UINT8)(C - 'a' + 10);
+    return 0xFF; // маркер ошибки
+}
+
+UINT8 AToHex(const CHAR *Str) {
+    if (!Str) return 0;
+
+    // Пропускаем ведущие пробелы
+    while (*Str == ' ') ++Str;
+
+    // Проверяем и пропускаем префикс 0x / 0X
+    if (Str[0] == '0' && (Str[1] == 'x' || Str[1] == 'X')) {
+        Str += 2;
+    }
+
+    UINT8 High = CharToHexDigit(Str[0]);
+    UINT8 Low  = CharToHexDigit(Str[1]);
+
+    // Если хотя бы один символ не hex-цифра — ошибка
+    if ((High == 0xFF) || (Low == 0xFF)) {
+        return 0;
+    }
+
+    return (High << 4) | Low;
 }

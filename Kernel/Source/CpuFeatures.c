@@ -8,7 +8,7 @@
 
 /* ============================================================================ Helper functions for checking support via CPUID ============================================================================ */
 
-static BOOL CpuHasSmep(VOID) {
+STATIC BOOL CpuHasSmep(VOID) {
     UINT32 Eax, Ebx, Ecx, Edx;
     
     // Leaf 7, Subleaf 0 — Extended Features
@@ -18,16 +18,7 @@ static BOOL CpuHasSmep(VOID) {
     return (Ebx & (1 << 7)) != 0;
 }
 
-static BOOL CpuHasSmap(VOID) {
-    UINT32 Eax, Ebx, Ecx, Edx;
-    
-    Cpuid(7, &Eax, &Ebx, &Ecx, &Edx);
-    
-    // SMAP bit 20 in EBX
-    return (Ebx & (1 << 20)) != 0;
-}
-
-static BOOL CpuHasUmip(VOID) {
+STATIC BOOL CpuHasUmip(VOID) {
     UINT32 Eax, Ebx, Ecx, Edx;
     
     Cpuid(7, &Eax, &Ebx, &Ecx, &Edx);
@@ -38,20 +29,13 @@ static BOOL CpuHasUmip(VOID) {
 
 /* ============================================================================ Basic switching functions ============================================================================ */
 
-INT CpuEnableSmepSmap(VOID) {
+INT CpuEnableSmep(VOID) {
     UINT64 Cr4 = ReadCr4();
     BOOL Changed = FALSE;
     
     #ifndef DISABLE_SMEP
     if (CpuHasSmep()) {
         Cr4 |= CR4_SMEP;
-        Changed = TRUE;
-    }
-    #endif
-    
-    #ifndef DISABLE_SMAP
-    if (CpuHasSmap()) {
-        Cr4 |= CR4_SMAP;
         Changed = TRUE;
     }
     #endif

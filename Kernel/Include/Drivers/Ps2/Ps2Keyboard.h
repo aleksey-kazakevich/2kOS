@@ -1,5 +1,6 @@
 #pragma once
 
+#include <SysDevice.h>
 #include <KDriver.h>
 #include <Return.h>
 #include <Types.h>
@@ -152,3 +153,5 @@ INT Ps2KeyboardDispatchEvents(VOID);
 // Internal functions (for IRQ)
 VOID Ps2HandleScanByte(UINT8 Byte);
 VOID Ps2KeyboardHandleIRQ(VOID);
+
+SysDevice *Ps2KeyboardRegisterSysDevice(VOID);

@@ -69,9 +69,9 @@ typedef struct {
     SpinLock Lock;
 } AcpiSciState;
 
-static AcpiSciState GAcpiSci = {0};
+STATIC AcpiSciState GAcpiSci = {0};
 
-static UINT32 AcpiSciReadReg(volatile VOID *Addr, UINT8 Width) {
+STATIC UINT32 AcpiSciReadReg(volatile VOID *Addr, UINT8 Width) {
     if (!Addr) return 0;
     
     switch (Width) {
@@ -84,7 +84,7 @@ static UINT32 AcpiSciReadReg(volatile VOID *Addr, UINT8 Width) {
     }
 }
 
-static VOID AcpiSciWriteReg(volatile VOID *Addr, UINT8 Width, UINT32 Value) {
+STATIC VOID AcpiSciWriteReg(volatile VOID *Addr, UINT8 Width, UINT32 Value) {
     if (!Addr) return;
     
     switch (Width) {
@@ -97,7 +97,7 @@ static VOID AcpiSciWriteReg(volatile VOID *Addr, UINT8 Width, UINT32 Value) {
     }
 }
 
-static VOID AcpiSciParseRegisters(VOID) {
+STATIC VOID AcpiSciParseRegisters(VOID) {
     Acpi *AcpiObj = AcpiGet();
     if (!AcpiObj || !AcpiObj->Fadt) return;
     

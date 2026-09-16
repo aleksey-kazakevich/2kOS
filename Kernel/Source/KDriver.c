@@ -2,11 +2,11 @@
 #include <KDriver.h>
 #include <Return.h>
 
-static ListHead GKDriverList;
-static UINT32 GKDriverCount = 0;
+STATIC ListHead GKDriverList;
+STATIC UINT32 GKDriverCount = 0;
 
-static UINT8 GKDriverPrivatePool[8192];
-static UINT32 GKDriverPrivateOffset = 0;
+STATIC UINT8 GKDriverPrivatePool[8192];
+STATIC UINT32 GKDriverPrivateOffset = 0;
 
 VOID KDriverInit(VOID) {
     ListInit(&GKDriverList);

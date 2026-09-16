@@ -34,39 +34,39 @@ struct {
 } GTimer = {0};
 
 
-static inline VOID PitSetMode(UINT8 Channel, UINT8 Mode, UINT8 Access);
-static inline VOID PitWriteCounter(UINT16 Count);
-static inline UINT16 PitReadCounter(VOID);
-static inline UINT16 PitReadCounterVerified(VOID);
-static VOID PitBusyWait(UINT32 Ms);
-static VOID IoBusyWait(UINT32 Iterations);
-static UINT32 TimerTscCalibratePrecise(VOID);
-static UINT32 TimerApicCalibrateWithTsc(UINT32 ExpectedMs);
-static UINT32 TimerApicCalibrateFromFadt(VOID);
-static BOOL TimerVerifyCalibrationFast(UINT32 VerifyMs);
-static BOOL TimerVerifyCalibration(VOID);
+STATIC INLINE VOID PitSetMode(UINT8 Channel, UINT8 Mode, UINT8 Access);
+STATIC INLINE VOID PitWriteCounter(UINT16 Count);
+STATIC INLINE UINT16 PitReadCounter(VOID);
+STATIC INLINE UINT16 PitReadCounterVerified(VOID);
+STATIC VOID PitBusyWait(UINT32 Ms);
+STATIC VOID IoBusyWait(UINT32 Iterations);
+STATIC UINT32 TimerTscCalibratePrecise(VOID);
+STATIC UINT32 TimerApicCalibrateWithTsc(UINT32 ExpectedMs);
+STATIC UINT32 TimerApicCalibrateFromFadt(VOID);
+STATIC BOOL TimerVerifyCalibrationFast(UINT32 VerifyMs);
+STATIC BOOL TimerVerifyCalibration(VOID);
 
 
-static VOID IoBusyWait(UINT32 Iterations) {
+STATIC VOID IoBusyWait(UINT32 Iterations) {
     for (UINT32 I = 0; I < Iterations; I++) {
         Outb(0x80, 0);
     }
 }
 
-static inline VOID PitSetMode(UINT8 Channel, UINT8 Mode, UINT8 Access) {
+STATIC INLINE VOID PitSetMode(UINT8 Channel, UINT8 Mode, UINT8 Access) {
     UINT8 Cmd = (Channel << 6) | (Access << 4) | (Mode << 1);
     Outb(0x43, Cmd);
     IoBusyWait(10);
 }
 
-static inline VOID PitWriteCounter(UINT16 Count) {
+STATIC INLINE VOID PitWriteCounter(UINT16 Count) {
     Outb(0x40, Count & 0xFF);
     IoBusyWait(10);
     Outb(0x40, (Count >> 8) & 0xFF);
     IoBusyWait(10);
 }
 
-static inline UINT16 PitReadCounter(VOID) {
+STATIC INLINE UINT16 PitReadCounter(VOID) {
     Outb(0x43, 0x80);
     IoBusyWait(10);
     UINT8 Low = Inb(0x40);
@@ -76,7 +76,7 @@ static inline UINT16 PitReadCounter(VOID) {
     return (UINT16)(Low | (High << 8));
 }
 
-static inline UINT16 PitReadCounterVerified(VOID) {
+STATIC INLINE UINT16 PitReadCounterVerified(VOID) {
     UINT16 Val1, Val2;
     INT Attempts = 0;
     
@@ -94,7 +94,7 @@ static inline UINT16 PitReadCounterVerified(VOID) {
     return (Val1 + Val2) / 2;
 }
 
-static VOID PitBusyWait(UINT32 Ms) {
+STATIC VOID PitBusyWait(UINT32 Ms) {
     PitSetMode(0, 0, 3);
     
     UINT32 PitTicks = (PIT_BASE_FREQ * Ms) / 1000;
@@ -111,7 +111,7 @@ static VOID PitBusyWait(UINT32 Ms) {
 }
 
 
-static UINT32 TimerTscCalibratePrecise(VOID) {
+STATIC UINT32 TimerTscCalibratePrecise(VOID) {
     UINT64 TscStart, TscEnd;
     UINT64 TotalTsc = 0;
     UINT32 ValidMeasurements = 0;
@@ -167,7 +167,7 @@ static UINT32 TimerTscCalibratePrecise(VOID) {
     return (UINT32)(TotalTsc / ValidMeasurements / 1000);
 }
 
-static UINT32 TimerApicCalibrateWithTsc(UINT32 ExpectedMs) {
+STATIC UINT32 TimerApicCalibrateWithTsc(UINT32 ExpectedMs) {
     UINT32 ApicStart, ApicEnd;
     UINT64 TscStart, TscEnd;
     UINT32 TotalApicTicks = 0;
@@ -223,7 +223,7 @@ static UINT32 TimerApicCalibrateWithTsc(UINT32 ExpectedMs) {
 }
 
 
-static UINT32 TimerApicCalibrateFromFadt(VOID) {
+STATIC UINT32 TimerApicCalibrateFromFadt(VOID) {
     Acpi *AcpiTable = AcpiGet();
 
     if (!AcpiTable || AcpiTable->ApicBusFreq == 0) {
@@ -232,7 +232,7 @@ static UINT32 TimerApicCalibrateFromFadt(VOID) {
     return AcpiTable->ApicBusFreq;
 }
 
-static BOOL TimerVerifyCalibrationFast(UINT32 VerifyMs) {
+STATIC BOOL TimerVerifyCalibrationFast(UINT32 VerifyMs) {
     UINT32 TestHz = 1000;
     UINT32 InitVal;
     UINT64 StartTicks;
@@ -281,7 +281,7 @@ static BOOL TimerVerifyCalibrationFast(UINT32 VerifyMs) {
     return (ElapsedTicks >= MinTicks && ElapsedTicks <= MaxTicks);
 }
 
-static BOOL TimerVerifyCalibration(VOID) {
+STATIC BOOL TimerVerifyCalibration(VOID) {
     return TimerVerifyCalibrationFast(50);
 }
 
@@ -346,6 +346,7 @@ VOID TimerInit(UINT32 DesiredFreq) {
     ApicWriteReg(LAPIC_LVT_TIMER, TIMER_VECTOR | TIMER_PERIODIC);
     ApicWriteReg(LAPIC_TIMER_INITCNT, InitValue);
 
+    TimerDelayInit();
     TimerSubscriberInit();
 
     TimerInitialized = TRUE;

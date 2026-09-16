@@ -2,7 +2,7 @@
 #include <Asm/Cpu.h>
 #include <Types.h>
 
-static UINT8 DfStack[4096] ATTRIBUTE(aligned(16));
+STATIC UINT8 DfStack[4096] ATTRIBUTE(aligned(16));
 
 struct GdtPtr {
     UINT16 Limit;
@@ -38,7 +38,7 @@ extern struct GdtPtr GdtDesc;
 UINT64 SyscallStackTop;
 UINT64 SyscallUserRsp;
 
-static VOID GdtSetTss(UINT64 Base, UINT32 Limit) {
+STATIC VOID GdtSetTss(UINT64 Base, UINT32 Limit) {
     UINT64 Low;
     UINT64 High;
 

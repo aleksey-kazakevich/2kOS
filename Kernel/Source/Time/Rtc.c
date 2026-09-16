@@ -2,7 +2,7 @@
 #include <Asm/Cpu.h>
 #include <Asm/Io.h>
 
-static VOID RtcWaitReady(VOID) {
+STATIC VOID RtcWaitReady(VOID) {
     while (1) {
         Outb(0x70, 0x0A);
         if (!(Inb(0x71) & 0x80))
@@ -10,12 +10,12 @@ static VOID RtcWaitReady(VOID) {
     }
 }
 
-static UINT8 CmosRead(UINT8 Reg) {
+STATIC UINT8 CmosRead(UINT8 Reg) {
     Outb(0x70, Reg);
     return Inb(0x71);
 }
 
-static UINT8 BcdToBin(UINT8 Bcd) {
+STATIC UINT8 BcdToBin(UINT8 Bcd) {
     return (Bcd & 0x0F) + (Bcd >> 4) * 10;
 }
 

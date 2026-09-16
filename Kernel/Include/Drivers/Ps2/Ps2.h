@@ -1,5 +1,6 @@
 #pragma once
 
+#include <SysDevice.h>
 #include <Types.h>
 #include <List.h>
 
@@ -127,3 +128,5 @@ VOID Ps2EnablePort1(VOID);
 VOID Ps2EnablePort2(VOID);
 VOID Ps2DisablePort1(VOID);
 VOID Ps2DisablePort2(VOID);
+SysDevice *Ps2RegisterSysDevice(VOID);
+SysDevice *Ps2GetSysDevice(VOID);

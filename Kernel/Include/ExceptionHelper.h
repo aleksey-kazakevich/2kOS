@@ -7,7 +7,7 @@
 extern Task InitTask;
 
 // Checking if the exception came from user mode
-static inline BOOL ExceptionFromUser(InterruptFrame *Frame) {
+STATIC INLINE BOOL ExceptionFromUser(InterruptFrame *Frame) {
     if (!Frame) return FALSE;
     // CS contains DPL (bits 0-1)
     // Ring 3 = 0x1B (0x18 | 3), Ring 0 = 0x08
@@ -16,7 +16,7 @@ static inline BOOL ExceptionFromUser(InterruptFrame *Frame) {
 
 // Trying to kill the current task if it is from a user
 // Returns TRUE if the task is killed, FALSE if it is a kernel
-static inline BOOL TryKillCurrentTask(InterruptFrame *Frame, const CHAR *Reason) {
+STATIC INLINE BOOL TryKillCurrentTask(InterruptFrame *Frame, const CHAR *Reason) {
     if (!Frame) return FALSE;
     
     // If the exception is from the kernel - we don’t kill it, you need to panic

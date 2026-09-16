@@ -7,24 +7,24 @@
 #include <Asm/Io.h>
 #include <Return.h>
 
-static ComDevice GComDevices[4] = {
+STATIC ComDevice GComDevices[4] = {
     {.Port = COM1_PORT, .Irq = COM_IRQ1, .Initialized = FALSE},
     {.Port = COM2_PORT, .Irq = COM_IRQ2, .Initialized = FALSE},
     {.Port = COM3_PORT, .Irq = COM_IRQ1, .Initialized = FALSE},
     {.Port = COM4_PORT, .Irq = COM_IRQ2, .Initialized = FALSE}
 };
 
-static ComDevice *GDefaultCom = NULLPTR;
+STATIC ComDevice *GDefaultCom = NULLPTR;
 
-static inline VOID ComWriteReg(ComDevice *Dev, UINT8 Offset, UINT8 Value) {
+STATIC INLINE VOID ComWriteReg(ComDevice *Dev, UINT8 Offset, UINT8 Value) {
     Outb(Dev->Port + Offset, Value);
 }
 
-static inline UINT8 ComReadReg(ComDevice *Dev, UINT8 Offset) {
+STATIC INLINE UINT8 ComReadReg(ComDevice *Dev, UINT8 Offset) {
     return Inb(Dev->Port + Offset);
 }
 
-static BOOL ComPortExists(UINT16 Port) {
+STATIC BOOL ComPortExists(UINT16 Port) {
     Outb(Port + COM_SCR, 0xAA);
     UINT8 Test = Inb(Port + COM_SCR);
     Outb(Port + COM_SCR, 0x55);
@@ -33,7 +33,7 @@ static BOOL ComPortExists(UINT16 Port) {
     return (Test == 0xAA && Test2 == 0x55);
 }
 
-static VOID ComSetupBaud(ComDevice *Dev, UINT32 BaudRate) {
+STATIC VOID ComSetupBaud(ComDevice *Dev, UINT32 BaudRate) {
     UINT16 Divisor = 115200 / BaudRate;
     
     if (Divisor == 0) Divisor = 1;
@@ -50,23 +50,23 @@ static VOID ComSetupBaud(ComDevice *Dev, UINT32 BaudRate) {
     ComWriteReg(Dev, COM_LCR, Lcr);
 }
 
-static VOID ComSetupLine(ComDevice *Dev) {
+STATIC VOID ComSetupLine(ComDevice *Dev) {
     UINT8 Lcr = COM_LCR_8BITS | COM_LCR_1_STOP;
     ComWriteReg(Dev, COM_LCR, Lcr);
 }
 
-static VOID ComSetupFifo(ComDevice *Dev) {
+STATIC VOID ComSetupFifo(ComDevice *Dev) {
     UINT8 Fcr = COM_FCR_ENABLE | COM_FCR_CLEAR_RX | COM_FCR_CLEAR_TX;
     ComWriteReg(Dev, COM_FCR, Fcr);
 }
 
-static VOID ComSetupModem(ComDevice *Dev) {
+STATIC VOID ComSetupModem(ComDevice *Dev) {
     // DTR, RTS, OUT2
     UINT8 Mcr = COM_MCR_DTR | COM_MCR_RTS | COM_MCR_OUT2;
     ComWriteReg(Dev, COM_MCR, Mcr);
 }
 
-static VOID ComDisableInterrupts(ComDevice *Dev) {
+STATIC VOID ComDisableInterrupts(ComDevice *Dev) {
     ComWriteReg(Dev, COM_IER, 0);
 }
 
@@ -138,6 +138,8 @@ INT ComInitAll(VOID) {
         }
     }
     
+    ComRegisterSysDevices();
+
     BaseconPrintf(BASECON_TYPE_NORMAL, "com: found %d ports\n", Found);
     return Found;
 }
@@ -237,4 +239,83 @@ VOID ComSetBaudRate(ComDevice *Dev, UINT32 BaudRate) {
     ComSetupBaud(Dev, BaudRate);
     Dev->BaudRate = BaudRate;
     SpinLockRelease(&Dev->Lock);
+}
+
+STATIC UINT8 ComPortToIndex(UINT16 Port) {
+    switch (Port) {
+        case COM1_PORT: return 1;
+        case COM2_PORT: return 2;
+        case COM3_PORT: return 3;
+        case COM4_PORT: return 4;
+        default:        return 0;
+    }
+}
+
+STATIC UINT8 ComPortToIrq(UINT16 Port) {
+    switch (Port) {
+        case COM1_PORT:
+        case COM3_PORT: return COM_IRQ1;   // IRQ 4
+        case COM2_PORT:
+        case COM4_PORT: return COM_IRQ2;   // IRQ 3
+        default:        return 0;
+    }
+}
+
+STATIC VOID ComRegisterOne(ComDevice *Dev, UINT8 Index) {
+    if (!Dev || !Dev->Initialized) return;
+
+    CHAR Name[SYSDEV_NAME_MAX];
+    SnPrintf(Name, sizeof(Name), "COM%u", Index);
+
+    CHAR Desc[SYSDEV_NAME_MAX];
+    SnPrintf(Desc, sizeof(Desc), "Serial port at 0x%X", Dev->Port);
+
+    SysDevice *Parent = SysDeviceGetRoot();
+    SysDevice *Sd = SysDeviceCreate(Parent, Name, Desc, SYSDEV_TYPE_SERIAL);
+    if (!Sd) return;
+
+    // --- Ресурсы ---
+
+    // I/O порт (8 регистров)
+    SysDeviceAddResource(Sd, SYSDEV_RES_IO, Dev->Port, 8);
+
+    // IRQ
+    UINT8 Irq = ComPortToIrq(Dev->Port);
+    if (Irq) {
+        SysDeviceAddResource(Sd, SYSDEV_RES_IRQ, Irq, 1);
+    }
+
+    // --- Свойства ---
+
+    SysDeviceSetPropU32(Sd, "port", Dev->Port);
+    SysDeviceSetPropU32(Sd, "irq", Irq);
+    SysDeviceSetPropU32(Sd, "baud", Dev->BaudRate);
+
+    // --- Привязка к KDriver ---
+
+    if (Dev->Driver) {
+        SysDeviceBindDriver(Sd, Dev->Driver);
+    } else {
+        SysDeviceSetState(Sd, SYSDEV_STATE_ENABLED);
+    }
+}
+
+UINT32 ComRegisterSysDevices(VOID) {
+    if (!SysDeviceGetRoot()) {
+        return 0;
+    }
+
+    UINT32 Count = 0;
+    for (INT I = 0; I < 4; I++) {
+        ComDevice *Dev = &GComDevices[I];
+        if (!Dev->Initialized) continue;
+
+        UINT8 Index = ComPortToIndex(Dev->Port);
+        if (Index == 0) continue;
+
+        ComRegisterOne(Dev, Index);
+        Count++;
+    }
+
+    return Count;
 }

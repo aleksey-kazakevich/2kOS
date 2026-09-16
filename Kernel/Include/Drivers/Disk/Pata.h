@@ -74,6 +74,25 @@
 #define PATA_DMA_TIMEOUT_MS 5000
 #define PATA_PIO_TIMEOUT_MS 10000
 
+/* ============================================================================
+ * ATAPI (optical drives)
+ * ============================================================================ */
+
+#define ATAPI_SECTOR_SIZE       2048
+#define ATAPI_CDB_MAX           16
+
+/* SCSI opcodes (subset, used by ATAPI) */
+#define SCSI_TEST_UNIT_READY    0x00
+#define SCSI_REQUEST_SENSE      0x03
+#define SCSI_INQUIRY            0x12
+#define SCSI_START_STOP_UNIT    0x1B
+#define SCSI_PREVENT_ALLOW      0x1E
+#define SCSI_READ_CAPACITY_10   0x25
+#define SCSI_READ_10            0x28
+#define SCSI_READ_12            0xA8
+#define SCSI_MODE_SENSE_6       0x1A
+#define SCSI_MODE_SENSE_10      0x5A
+
 typedef enum {
     PATA_CHANNEL_PRIMARY = 0,
     PATA_CHANNEL_SECONDARY = 1
@@ -81,8 +100,7 @@ typedef enum {
 
 typedef enum {
     PATA_TYPE_NONE = 0,
-    PATA_TYPE_ATA,
-    PATA_TYPE_ATAPI
+    PATA_TYPE_ATA
 } PataDeviceType;
 
 typedef enum {
@@ -117,16 +135,18 @@ typedef struct {
     UINT8 Irq;
     PciDevice* PciDev;
     UINT16 BusMasterBase;
-    
+
     // NEW: Synchronization
     SpinLock DriveLock;
     volatile BOOL DmaInProgress;
-    
+
     // NEW: Statistics
     UINT32 TotalReads;
     UINT32 TotalWrites;
     UINT32 DmaFailures;
     UINT32 PioFallbacks;
+
+    CHAR Model[41];
 } PataDrive;
 
 /* Request structure */

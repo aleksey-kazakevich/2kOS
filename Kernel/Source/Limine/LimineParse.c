@@ -1,4 +1,5 @@
 #include <Limine/LimineParse.h>
+#include <Lib/String.h>
 #include <Types.h>
 
 BOOL LimineIsAvailable(VOID *Response) {
@@ -201,4 +202,45 @@ const CHAR* LimineGetCmdLine(VOID) {
     struct limine_executable_cmdline_response *Resp = 
         (struct limine_executable_cmdline_response *)cmdline_req.response;
     return Resp->cmdline ? Resp->cmdline : "";
+}
+
+BOOL LimineModulesAvailable(VOID) {
+    return module_req.response != NULLPTR;
+}
+
+UINT64 LimineGetModuleCount(VOID) {
+    if (!LimineModulesAvailable()) return 0;
+    struct limine_module_response *Resp = 
+        (struct limine_module_response *)module_req.response;
+    return Resp->module_count;
+}
+
+struct limine_file *LimineGetModule(UINT64 Index) {
+    if (!LimineModulesAvailable()) return NULLPTR;
+    struct limine_module_response *Resp = 
+        (struct limine_module_response *)module_req.response;
+    if (Index >= Resp->module_count) return NULLPTR;
+    return Resp->modules[Index];
+}
+
+struct limine_file *LimineFindModuleByPath(const CHAR *Substring) {
+    UINT64 Count = LimineGetModuleCount();
+    for (UINT64 I = 0; I < Count; I++) {
+        struct limine_file *F = LimineGetModule(I);
+        if (F && F->path && StrStr(F->path, Substring)) {
+            return F;
+        }
+    }
+    return NULLPTR;
+}
+
+struct limine_file *LimineFindModuleByString(const CHAR *String) {
+    UINT64 Count = LimineGetModuleCount();
+    for (UINT64 I = 0; I < Count; I++) {
+        struct limine_file *F = LimineGetModule(I);
+        if (F && F->string && StrCaseCmp(F->string, String) == 0) {
+            return F;
+        }
+    }
+    return NULLPTR;
 }

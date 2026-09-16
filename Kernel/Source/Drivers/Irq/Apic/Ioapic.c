@@ -3,6 +3,8 @@
 #include <Drivers/Acpi/Acpi.h>
 #include <Mem/Allocator.h>
 #include <Lib/String.h>
+#include <Lib/StdIo.h>
+#include <SysDevice.h>
 #include <Asm/Mmio.h>
 #include <KDriver.h>
 #include <Asm/Io.h>
@@ -12,9 +14,9 @@
 // Global State
 // ============================================================================
 
-static ListHead GIoapicList;
-static UINT32 GIoapicCount = 0;
-static IoapicOverride GIoapicOverrides[256];
+STATIC ListHead GIoapicList;
+STATIC UINT32 GIoapicCount = 0;
+STATIC IoapicOverride GIoapicOverrides[256];
 
 // ============================================================================
 // IOAPIC Register Access
@@ -24,17 +26,17 @@ static IoapicOverride GIoapicOverrides[256];
 #define IOAPIC_REG_VERSION   0x01
 #define IOAPIC_REDTBL_BASE   0x10
 
-static inline UINT32 IoapicReadReg(volatile VOID *Base, UINT32 Reg) {
+STATIC INLINE UINT32 IoapicReadReg(volatile VOID *Base, UINT32 Reg) {
     MmioWrite32((volatile UINT32*)((UINTPTR)Base + 0x00), Reg);
     return MmioRead32((volatile UINT32*)((UINTPTR)Base + 0x10));
 }
 
-static inline VOID IoapicWriteReg(volatile VOID *Base, UINT32 Reg, UINT32 Val) {
+STATIC INLINE VOID IoapicWriteReg(volatile VOID *Base, UINT32 Reg, UINT32 Val) {
     MmioWrite32((volatile UINT32*)((UINTPTR)Base + 0x00), Reg);
     MmioWrite32((volatile UINT32*)((UINTPTR)Base + 0x10), Val);
 }
 
-static VOID IoapicSetRedirection(IoapicDevice *Ioapic, UINT32 Index, UINT32 Low, UINT32 High) {
+STATIC VOID IoapicSetRedirection(IoapicDevice *Ioapic, UINT32 Index, UINT32 Low, UINT32 High) {
     UINT32 RegLow = IOAPIC_REDTBL_BASE + Index * 2;
     UINT32 RegHigh = RegLow + 1;
     
@@ -42,7 +44,7 @@ static VOID IoapicSetRedirection(IoapicDevice *Ioapic, UINT32 Index, UINT32 Low,
     IoapicWriteReg(Ioapic->VirtAddr, RegLow, Low);
 }
 
-static VOID IoapicGetRedirection(IoapicDevice *Ioapic, UINT32 Index, UINT32 *Low, UINT32 *High) {
+STATIC VOID IoapicGetRedirection(IoapicDevice *Ioapic, UINT32 Index, UINT32 *Low, UINT32 *High) {
     UINT32 RegLow = IOAPIC_REDTBL_BASE + Index * 2;
     UINT32 RegHigh = RegLow + 1;
     
@@ -54,7 +56,7 @@ static VOID IoapicGetRedirection(IoapicDevice *Ioapic, UINT32 Index, UINT32 *Low
 // Internal Functions
 // ============================================================================
 
-static IoapicDevice* IoapicFindForGsiInternal(UINT32 Gsi) {
+STATIC IoapicDevice* IoapicFindForGsiInternal(UINT32 Gsi) {
     ListHead *Pos;
     IoapicDevice *Best = NULLPTR;
     
@@ -183,6 +185,8 @@ INT IoapicInit(VOID) {
     
     // Registering the driver
     KDriverRegister(KDriverGenerateStruct("IOAPIC", 0, TRUE, NULLPTR, NULLPTR));
+
+    IoapicRegisterSysDevices();
     
     RETURN(SUCCESS);
 }
@@ -341,4 +345,75 @@ INT IoapicGetOverride(UINT32 Source, UINT32 *Gsi, UINT32 *Flags) {
     if (Gsi) *Gsi = Source;
     if (Flags) *Flags = IOAPIC_FLAG_EDGE_TRIGGERED | IOAPIC_FLAG_ACTIVE_HIGH;
     RETURN(SUCCESS);
+}
+
+STATIC VOID IoapicRegisterOne(IoapicDevice *Ioapic, UINT32 Index,
+                               SysDevice *Parent) {
+    if (!Ioapic || !Parent) return;
+
+    CHAR Name[SYSDEV_NAME_MAX];
+    SnPrintf(Name, sizeof(Name), "IOAPIC%u", Index);
+
+    SysDevice *Dev = SysDeviceCreate(Parent,
+                                      Name,
+                                      "I/O Advanced Programmable Interrupt Controller",
+                                      SYSDEV_TYPE_INTERRUPT);
+    if (!Dev) return;
+
+    // --- Ресурсы ---
+
+    // MMIO регион (типично 0x20 байт: IOREGSEL + IOWIN + padding)
+    SysDeviceAddResource(Dev, SYSDEV_RES_MMIO, Ioapic->Address, 0x20);
+
+    // GSI range — это тоже «ресурс» устройства
+    // (диапазон прерываний, которые оно обслуживает)
+    if (Ioapic->MaxRedir > 0) {
+        SysDeviceAddResource(Dev, SYSDEV_RES_IRQ,
+                             Ioapic->GsiBase, Ioapic->MaxRedir);
+    }
+
+    // --- Свойства ---
+
+    SysDeviceSetPropU32(Dev, "id", Ioapic->Id);
+    SysDeviceSetPropU32(Dev, "version", Ioapic->Version);
+    SysDeviceSetPropU32(Dev, "gsi_base", Ioapic->GsiBase);
+    SysDeviceSetPropU32(Dev, "max_redir", Ioapic->MaxRedir);
+    SysDeviceSetPropU32(Dev, "enabled", Ioapic->Enabled ? 1 : 0);
+    SysDeviceSetPropHex(Dev, "phys_addr", Ioapic->Address);
+
+    if (Ioapic->VirtAddr) {
+        SysDeviceSetPropHex(Dev, "virt_addr",
+                            (UINT64)(UINTPTR)Ioapic->VirtAddr);
+    }
+
+    // --- Привязка к KDriver ---
+
+    KDriver *Drv = KDriverFindByName("IOAPIC");
+    if (Drv) {
+        SysDeviceBindDriver(Dev, Drv);
+    } else {
+        SysDeviceSetState(Dev, SYSDEV_STATE_ENABLED);
+    }
+}
+
+UINT32 IoapicRegisterSysDevices(VOID) {
+    if (GIoapicCount == 0) return 0;
+
+    // Родитель — ACPI bus, если есть. Иначе — root.
+    SysDevice *Parent = AcpiGetSysDevice();
+    if (!Parent) Parent = SysDeviceGetRoot();
+    if (!Parent) return 0;
+
+    UINT32 Count = 0;
+    ListHead *Pos;
+    UINT32 Index = 0;
+
+    ListForEach(Pos, &GIoapicList) {
+        IoapicDevice *Ioapic = ListEntry(Pos, IoapicDevice, Node);
+        IoapicRegisterOne(Ioapic, Index, Parent);
+        Index++;
+        Count++;
+    }
+
+    return Count;
 }

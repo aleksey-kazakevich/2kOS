@@ -9,7 +9,7 @@
 #include <Basecon.h>
 #include <Types.h>
 
-static inline UINT64 GetPageFaultAddress(VOID) {
+STATIC INLINE UINT64 GetPageFaultAddress(VOID) {
     UINT64 Addr;
     asm volatile("mov %%cr2, %0" : "=r"(Addr));
     return Addr;
@@ -21,18 +21,18 @@ static inline UINT64 GetPageFaultAddress(VOID) {
 #define PF_RESERVED  (1 << 3)  // Reserved bit set
 #define PF_INSTR     (1 << 4)  // Instruction
 
-static BOOL IsUserStackAddress(UINT64 Addr) {
+STATIC BOOL IsUserStackAddress(UINT64 Addr) {
     // User stack
     UINT64 StackBottom = USER_STACK_TOP - USER_STACK_DEFAULT - (16 * PAGE_SIZE);
     return (Addr >= StackBottom && Addr < USER_STACK_TOP);
 }
 
-static BOOL IsUserCodeAddress(UINT64 Addr) {
+STATIC BOOL IsUserCodeAddress(UINT64 Addr) {
     // User code: starting with USER_CODE_VADDR
     return (Addr >= USER_CODE_VADDR && Addr < USER_CODE_VADDR + (16 * PAGE_SIZE));
 }
 
-static INT HandleUserPageFault(Task *Current, UINT64 FaultAddr, UINT64 ErrorCode) {
+STATIC INT HandleUserPageFault(Task *Current, UINT64 FaultAddr, UINT64 ErrorCode) {
     if (!Current || !Current->PageTable) {
         return -1;
     }
@@ -113,7 +113,7 @@ static INT HandleUserPageFault(Task *Current, UINT64 FaultAddr, UINT64 ErrorCode
     return -1;
 }
 
-static INT HandleKernelPageFault(UINT64 FaultAddr, UINT64 ErrorCode) {
+STATIC INT HandleKernelPageFault(UINT64 FaultAddr, UINT64 ErrorCode) {
     (VOID)FaultAddr;
     (VOID)ErrorCode;
 

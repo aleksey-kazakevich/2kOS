@@ -9,7 +9,7 @@
 #include <Asm/Io.h>
 #include <Types.h>
 
-static UINT64 FindRsdp(VOID) {
+STATIC UINT64 FindRsdp(VOID) {
     UINT64 RsdpAddr = 0;
     
     RsdpAddr = LimineGetRsdp();

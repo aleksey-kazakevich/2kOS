@@ -13,18 +13,18 @@ EXTERN(UINT8, StackEnd);
 
 Task InitTask;
 Task *TaskRing = NULLPTR;
-static Task *CurrentTask = NULLPTR;
-static int NextPid = 1;
-static Task *ZombieList = NULLPTR;
+STATIC Task *CurrentTask = NULLPTR;
+STATIC int NextPid = 1;
+STATIC Task *ZombieList = NULLPTR;
 
-static VOID AddToZombieList(Task *T) {
+STATIC VOID AddToZombieList(Task *T) {
     if (!T)
         return;
     T->ZombieNext = ZombieList;
     ZombieList = T;
 }
 
-static INT UnlinkFromRing(Task *T) {
+STATIC INT UnlinkFromRing(Task *T) {
     if (!TaskRing || !T)
         return -1;
 
@@ -66,14 +66,14 @@ VOID *AllocKernelStack(USIZE Bytes, USIZE *OutSize) {
     return Virt;
 }
 
-static VOID FreeKernelStack(VOID *Virt, USIZE Size) {
+STATIC VOID FreeKernelStack(VOID *Virt, USIZE Size) {
     if (!Virt || Size == 0)
         return;
     UINT32 Pages = (UINT32)(PAGE_ALIGN_UP(Size) / PAGE_SIZE);
     PhysAllocFreeRange(PhysAllocGet(), VirtToPhysPtr(Virt), Pages);
 }
 
-static VOID InsertTask(Task *T) {
+STATIC VOID InsertTask(Task *T) {
     UINTPTR Flags = SaveFlags();
     LocalInterruptsDisable();
     if (!TaskRing) {
@@ -87,7 +87,7 @@ static VOID InsertTask(Task *T) {
     RestoreFlags(Flags);
 }
 
-static VOID FreeTaskResources(Task *T) {
+STATIC VOID FreeTaskResources(Task *T) {
     if (!T || T == &InitTask)
         return;
 
@@ -100,7 +100,7 @@ static VOID FreeTaskResources(Task *T) {
     MemoryFree(T);
 }
 
-static Task *PickNext(VOID) {
+STATIC Task *PickNext(VOID) {
     if (!TaskRing)
         return NULLPTR;
 
@@ -115,11 +115,11 @@ static Task *PickNext(VOID) {
     return NULLPTR;
 }
 
-static UINT64 KernelStackTop(Task *T) {
+STATIC UINT64 KernelStackTop(Task *T) {
     return ((UINT64)T->KernelStack + T->KernelStackSize) & ~0xFULL;
 }
 
-static UINT64 *TaskMm(Task *T) {
+STATIC UINT64 *TaskMm(Task *T) {
     if (T && T->PageTable)
         return T->PageTable;
     return PagingGetKernelRoot();
@@ -535,4 +535,41 @@ BOOL IsAddressInUserSpace(UINT64 Addr) {
 BOOL IsCurrentFromUser(VOID) {
     if (!CurrentTask) return FALSE;
     return CurrentTask->IsUser;
+}
+
+INT UserTaskCreateFromPageTable(UINT64 *Pml4,
+                                 UINT64 Entry,
+                                 UINT64 UserSp,
+                                 const CHAR *Name) {
+    if (!Pml4 || !Entry) return -1;
+
+    Task *T = (Task *)MemoryAllocate(sizeof(Task));
+    if (!T) return -1;
+    MemSet(T, 0, sizeof(Task));
+
+    USIZE KSize = 0;
+    VOID *KStack = AllocKernelStack(KSTACK_SIZE, &KSize);
+    if (!KStack) {
+        MemoryFree(T);
+        PagingDestroyUserAddressSpace(Pml4);
+        return -1;
+    }
+
+    T->Pid = NextPid++;
+    T->State = TASK_READY;
+    T->KernelStack = KStack;
+    T->KernelStackSize = KSize;
+    T->PageTable = Pml4;
+    T->IsUser = TRUE;
+    StrnCpy(T->Name, Name ? Name : "user", sizeof(T->Name) - 1);
+
+    T->Regs = PrepareInitialStack(Entry,
+                                  (VOID *)KernelStackTop(T),
+                                  UserSp,
+                                  0,
+                                  0,
+                                  TRUE);
+
+    InsertTask(T);
+    return T->Pid;
 }

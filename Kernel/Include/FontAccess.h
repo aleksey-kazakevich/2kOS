@@ -5,25 +5,25 @@
 #include <Lib/Font/Vga.h>
 
 // ========== Quick access tables ==========
-static const UINT8 (*FontUppercase[26])[16] = {
+STATIC const UINT8 (*FontUppercase[26])[16] = {
     &A, &B, &C, &D, &E, &F, &G, &H, &I, &J,
     &K, &L, &M, &N, &O, &P, &Q, &R, &S, &T,
     &U, &V, &W, &X, &Y, &Z
 };
 
-static const UINT8 (*FontLowercase[26])[16] = {
+STATIC const UINT8 (*FontLowercase[26])[16] = {
     &a, &b, &c, &d, &e, &f, &g, &h, &i, &j,
     &k, &l, &m, &n, &o, &p, &q, &r, &s, &t,
     &u, &v, &w, &x, &y, &z
 };
 
-static const UINT8 (*FontNumbers[10])[16] = {
+STATIC const UINT8 (*FontNumbers[10])[16] = {
     &Digit0, &Digit1, &Digit2, &Digit3, &Digit4,
     &Digit5, &Digit6, &Digit7, &Digit8, &Digit9
 };
 
 // ========== Function for obtaining a symbol by code (0x00-0xFF) ==========
-static const UINT8 (*FontGetGlyphByCode(UINT8 Code))[16] {
+STATIC const UINT8 (*FontGetGlyphByCode(UINT8 Code))[16] {
     // A-Z (0x41-0x5A)
     if (Code >= 0x41 && Code <= 0x5A) {
         return FontUppercase[Code - 0x41];
@@ -241,6 +241,6 @@ static const UINT8 (*FontGetGlyphByCode(UINT8 Code))[16] {
 }
 
 // ========== Convenient function for getting by char ==========
-static const UINT8 (*FontGetGlyph(CHAR C))[16] {
+STATIC const UINT8 (*FontGetGlyph(CHAR C))[16] {
     return FontGetGlyphByCode((UINT8)C);
 }

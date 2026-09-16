@@ -17,7 +17,7 @@
 typedef UINT64 (*SyscallFunction)(UINT64 Arg1, UINT64 Arg2, UINT64 Arg3,
                                   UINT64 Arg4, UINT64 Arg5, UINT64 Arg6);
 
-static inline UINT64 Syscall(UINT64 Num, UINT64 Arg1, UINT64 Arg2, 
+STATIC INLINE UINT64 Syscall(UINT64 Num, UINT64 Arg1, UINT64 Arg2, 
                               UINT64 Arg3, UINT64 Arg4, UINT64 Arg5) {
     UINT64 Result;
     
@@ -38,19 +38,19 @@ static inline UINT64 Syscall(UINT64 Num, UINT64 Arg1, UINT64 Arg2,
     return Result;
 }
 
-static inline UINT64 SysWrite(UINT64 Fd, const CHAR *Buf, UINT64 Count) {
+STATIC INLINE UINT64 SysWrite(UINT64 Fd, const CHAR *Buf, UINT64 Count) {
     return Syscall(SYS_WRITE, Fd, (UINT64)Buf, Count, 0, 0);
 }
 
-static inline UINT64 SysExit(UINT64 Code) {
+STATIC INLINE UINT64 SysExit(UINT64 Code) {
     return Syscall(SYS_EXIT, Code, 0, 0, 0, 0);
 }
 
-static inline UINT64 SysGetPid(VOID) {
+STATIC INLINE UINT64 SysGetPid(VOID) {
     return Syscall(SYS_GETPID, 0, 0, 0, 0, 0);
 }
 
-static inline UINT64 SysGetTicks(VOID) {
+STATIC INLINE UINT64 SysGetTicks(VOID) {
     return Syscall(SYS_GETTICKS, 0, 0, 0, 0, 0);
 }
 

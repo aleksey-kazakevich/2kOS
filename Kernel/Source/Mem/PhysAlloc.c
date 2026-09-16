@@ -6,18 +6,21 @@
 #include <Types.h>
 
 // Dynamic bitmap is now a pointer, not an array
-static PhysAlloc GPhysAllocator;
-static UINT8 *PhysAllocBitmap = NULLPTR;  // Dynamic pointer
-static UINT64 PhysAllocBitmapSize = 0;    // Bitmap size in bytes
+STATIC PhysAlloc GPhysAllocator;
+STATIC UINT8 *PhysAllocBitmap = NULLPTR;  // Dynamic pointer
+STATIC UINT64 PhysAllocBitmapSize = 0;    // Bitmap size in bytes
 
 EXTERN(CHAR, KernelPhysStart);
 EXTERN(CHAR, KernelPhysEnd);
+
+STATIC VOID PhysAllocMarkRange(PhysAlloc *PhysAllocator, UINT32 StartPage, UINT32 Count, BOOL Used);
+STATIC UINT32 PhysAllocFindContinuousPages(PhysAlloc *PhysAllocator, UINT32 Count);
 
 // ============================================================================
 // Helper function: find a free contiguous area for a bitmap
 // ============================================================================
 
-static UINT64 FindBitmapMemory(struct limine_memmap_entry **Entries, UINT64 EntryCount, UINT64 NeededBytes) {
+STATIC UINT64 FindBitmapMemory(struct limine_memmap_entry **Entries, UINT64 EntryCount, UINT64 NeededBytes) {
     UINT64 BestAddr = 0;
     UINT64 BestSize = 0;
     
@@ -182,7 +185,7 @@ VOID PhysAllocInit(PhysAlloc *PhysAllocator) {
             }
         }
     }
-    
+
     // Core
     UINT64 KernelStart = (UINT64)&KernelPhysStart & ~(PAGE_SIZE - 1);
     UINT64 KernelEnd = ((UINT64)&KernelPhysEnd + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
@@ -281,7 +284,7 @@ VOID PhysAllocFreePage(PhysAlloc *PhysAllocator, VOID *Addr) {
     }
 }
 
-static UINT32 PhysAllocFindContinuousPages(PhysAlloc *PhysAllocator, UINT32 Count) {
+STATIC UINT32 PhysAllocFindContinuousPages(PhysAlloc *PhysAllocator, UINT32 Count) {
     if (!PhysAllocator || Count == 0 || Count > PhysAllocator->TotalPages) return (UINT32)-1;
     
     UINT32 BitmapBytes = (PhysAllocator->TotalPages + 7) / 8;
@@ -316,7 +319,7 @@ static UINT32 PhysAllocFindContinuousPages(PhysAlloc *PhysAllocator, UINT32 Coun
     return (UINT32)-1;
 }
 
-static VOID PhysAllocMarkRange(PhysAlloc *PhysAllocator, UINT32 StartPage, UINT32 Count, BOOL Used) {
+STATIC VOID PhysAllocMarkRange(PhysAlloc *PhysAllocator, UINT32 StartPage, UINT32 Count, BOOL Used) {
     for (UINT32 I = 0; I < Count; I++) {
         UINT32 PageIdx = StartPage + I;
         if (PageIdx >= PhysAllocator->TotalPages) break;
@@ -413,6 +416,34 @@ VOID* PhysAllocAllocateAlignedRange(PhysAlloc *PhysAllocator, UINT32 PageCount, 
     }
     
     return NULLPTR;
+}
+
+VOID PhysAllocReserveRange(PhysAlloc *PhysAllocator, UINT64 PhysAddr, UINT64 Size) {
+    if (!PhysAllocator || !PhysAllocator->Bitmap || Size == 0) return;
+    if (PhysAddr < PhysAllocator->BaseAddr) return;
+
+    UINT64 End = PhysAddr + Size;
+
+    // Границы PMM
+    UINT64 PmmBase = PhysAllocator->BaseAddr;
+    UINT64 PmmEnd  = PmmBase + (UINT64)PhysAllocator->TotalPages * PAGE_SIZE;
+
+    if (PhysAddr >= PmmEnd) return;
+    if (End > PmmEnd) End = PmmEnd;
+
+    // Выравниваем на страницы
+    UINT64 StartAligned = PhysAddr & ~(PAGE_SIZE - 1);
+    UINT64 EndAligned   = (End + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    UINT32 StartPage = (UINT32)((StartAligned - PmmBase) / PAGE_SIZE);
+    UINT32 PageCount = (UINT32)((EndAligned - StartAligned) / PAGE_SIZE);
+
+    if (StartPage >= PhysAllocator->TotalPages) return;
+    if (StartPage + PageCount > PhysAllocator->TotalPages) {
+        PageCount = PhysAllocator->TotalPages - StartPage;
+    }
+
+    PhysAllocMarkRange(PhysAllocator, StartPage, PageCount, TRUE);
 }
 
 PhysAlloc* PhysAllocGet(VOID) {

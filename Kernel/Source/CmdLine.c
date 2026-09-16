@@ -6,20 +6,20 @@
 #include <Return.h>
 
 // Static State
-static CHAR GCmdLineBuffer[4096] = {0};  // Raw command line
-static BOOL GInitialized = FALSE;
+STATIC CHAR GCmdLineBuffer[4096] = {0};  // Raw command line
+STATIC BOOL GInitialized = FALSE;
 
-static BOOL IsWhitespace(CHAR C) {
+STATIC BOOL IsWhitespace(CHAR C) {
     return C == ' ' || C == '\t' || C == '\n' || C == '\r';
 }
 
-static VOID SkipWhitespace(const CHAR **Str) {
+STATIC VOID SkipWhitespace(const CHAR **Str) {
     while (**Str && IsWhitespace(**Str)) {
         (*Str)++;
     }
 }
 
-static const CHAR* FindParamValue(const CHAR *Param, const CHAR *CmdLine) {
+STATIC const CHAR* FindParamValue(const CHAR *Param, const CHAR *CmdLine) {
     if (!Param || !CmdLine) return NULLPTR;
     
     USIZE ParamLen = StrLen(Param);
@@ -55,7 +55,7 @@ static const CHAR* FindParamValue(const CHAR *Param, const CHAR *CmdLine) {
     return NULLPTR;
 }
 
-static const CHAR* FindParamValueWithType(const CHAR *Param, const CHAR **EndPtr) {
+STATIC const CHAR* FindParamValueWithType(const CHAR *Param, const CHAR **EndPtr) {
     const CHAR *CmdLine = GCmdLineBuffer;
     if (!CmdLine || !*CmdLine) return NULLPTR;
     

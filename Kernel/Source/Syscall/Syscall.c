@@ -7,16 +7,16 @@
 #include <Basecon.h>
 #include <Return.h>
 
-static SyscallFunction GSyscallTable[SYSCALL_MAX] = {0};
-static UINT32 GSyscallCount = 0;
+STATIC SyscallFunction GSyscallTable[SYSCALL_MAX] = {0};
+STATIC UINT32 GSyscallCount = 0;
 
-static BOOL IsUserPointer(VOID *Ptr) {
+STATIC BOOL IsUserPointer(VOID *Ptr) {
     UINT64 Addr = (UINT64)Ptr;
     // User addresses in the range: 0x400000 - 0x7FFFFFFFF000
     return (Addr >= 0x400000 && Addr < 0x00007FFFFFFFFFFFULL);
 }
 
-static INT CopyFromUser(VOID *Dest, const VOID *Src, USIZE Size) {
+STATIC INT CopyFromUser(VOID *Dest, const VOID *Src, USIZE Size) {
     Task *Current = GetCurrentTask();
     if (!Current || !Current->PageTable) return -1;
     if (!IsUserPointer((VOID*)Src)) return -1;
@@ -33,7 +33,7 @@ static INT CopyFromUser(VOID *Dest, const VOID *Src, USIZE Size) {
     return 0;
 }
 
-static INT CopyToUser(VOID *Dest, const VOID *Src, USIZE Size) {
+STATIC INT CopyToUser(VOID *Dest, const VOID *Src, USIZE Size) {
     Task *Current = GetCurrentTask();
     if (!Current || !Current->PageTable) return -1;
     if (!IsUserPointer(Dest)) return -1;
@@ -50,7 +50,7 @@ static INT CopyToUser(VOID *Dest, const VOID *Src, USIZE Size) {
     return 0;
 }
 
-static CHAR* CopyStringFromUser(const CHAR *UserStr) {
+STATIC CHAR* CopyStringFromUser(const CHAR *UserStr) {
     if (!IsUserPointer((VOID*)UserStr)) return NULLPTR;
     
     Task *Current = GetCurrentTask();
@@ -78,7 +78,7 @@ static CHAR* CopyStringFromUser(const CHAR *UserStr) {
     return KernelStr;
 }
 
-static UINT64 SysWriteHandler(UINT64 Fd, UINT64 Buf, UINT64 Count) {
+STATIC UINT64 SysWriteHandler(UINT64 Fd, UINT64 Buf, UINT64 Count) {
     if (Count == 0) return 0;
     if (!IsUserPointer((VOID*)Buf)) return -1;
     if (Count > 4096) Count = 4096;
@@ -99,18 +99,18 @@ static UINT64 SysWriteHandler(UINT64 Fd, UINT64 Buf, UINT64 Count) {
     return Count;
 }
 
-static UINT64 SysExitHandler(UINT64 Code) {
+STATIC UINT64 SysExitHandler(UINT64 Code) {
     TaskExit((INT)Code);
     return 0;
 }
 
-static UINT64 SysGetPidHandler(VOID) {
+STATIC UINT64 SysGetPidHandler(VOID) {
     Task *Current = GetCurrentTask();
     if (!Current) return 0;
     return Current->Pid;
 }
 
-static UINT64 SysGetTicksHandler(VOID) {
+STATIC UINT64 SysGetTicksHandler(VOID) {
     return TimerTicks();
 }
 
@@ -123,7 +123,7 @@ INT SyscallRegister(UINT64 Num, SyscallFunction Func) {
     return SUCCESS;
 }
 
-static VOID SyscallRegisterAll(VOID) {
+STATIC VOID SyscallRegisterAll(VOID) {
     SyscallRegister(SYS_WRITE, (SyscallFunction)SysWriteHandler);
     SyscallRegister(SYS_EXIT, (SyscallFunction)SysExitHandler);
     SyscallRegister(SYS_GETPID, (SyscallFunction)SysGetPidHandler);

@@ -4,6 +4,9 @@ typedef void VOID;
 
 #define NULLPTR ((VOID *)0)
 
+#define STATIC static
+#define INLINE inline
+
 typedef enum {
     FALSE = 0,
     TRUE = 1

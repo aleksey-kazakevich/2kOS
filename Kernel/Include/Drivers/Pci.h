@@ -1,5 +1,6 @@
 #pragma once
 
+#include <SysDevice.h>
 #include <Types.h>
 
 //==================== GENERAL CONSTANTS ====================
@@ -128,3 +129,8 @@ UINT8 PciFindCap(PciDevice *Dev, UINT8 CapId);
 PciDevice* PciGetFirst(VOID);
 PciDevice* PciGetNext(PciDevice *Dev);
 UINT32 PciGetCount(VOID);
+
+UINT32 PciRegisterSysDevices(VOID);
+
+// Получить SysDevice* узла PCI bus.
+SysDevice *PciGetSysDevice(VOID);

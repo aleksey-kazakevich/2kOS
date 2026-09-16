@@ -20,7 +20,7 @@
 // ============================================================================
 
 // Character table for normal mode (without Shift) - SET 1
-static const CHAR GSet1Lower[256] = {
+STATIC const CHAR GSet1Lower[256] = {
     // 0x00-0x0F
     [0x01] = 27,    // ESC
     [0x02] = '1',
@@ -96,7 +96,7 @@ static const CHAR GSet1Lower[256] = {
 };
 
 // Symbol table with Shift - SET 1
-static const CHAR GSet1Upper[256] = {
+STATIC const CHAR GSet1Upper[256] = {
     // 0x00-0x0F
     [0x01] = 27,    // ESC
     [0x02] = '!',
@@ -193,9 +193,9 @@ typedef struct {
     } Subscribers[PS2_MAX_SUBSCRIBERS];
 } Ps2KeyboardState;
 
-static Ps2KeyboardState GPs2 = {0};
+STATIC Ps2KeyboardState GPs2 = {0};
 
-static struct {
+STATIC struct {
     KeyEvent Events[PS2_KEY_QUEUE_SIZE];
     volatile UINT32 Head;
     volatile UINT32 Tail;
@@ -205,26 +205,26 @@ static struct {
 // PROTOTYPES OF INTERNAL FUNCTIONS
 // ============================================================================
 
-static BOOL Ps2KeyboardWaitWrite(INT TimeoutMs);
-static BOOL Ps2KeyboardWaitRead(INT TimeoutMs);
-static VOID Ps2KeyboardFlushBuffer(VOID);
-static BOOL Ps2KeyboardSendCommand(UINT8 Cmd);
-static BOOL Ps2KeyboardReadDataWithTimeout(UINT8 *Data, INT TimeoutMs);
-static VOID UpdateModifiers(UINT8 RawCode, BOOL Pressed);
-static CHAR ScanCodeToAscii(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers);
-static VOID ProcessKeyEvent(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers);
-static BOOL Ps2KeyboardDisable(VOID);
-static BOOL Ps2KeyboardEnable(VOID);
-static BOOL Ps2KeyboardReset(VOID);
-static BOOL Ps2KeyboardSetScanCodeSet(UINT8 Set);
-static UINT8 Ps2KeyboardQueryScanCodeSet(VOID);
-static VOID Ps2KeyboardResetModifiers(VOID);
+STATIC BOOL Ps2KeyboardWaitWrite(INT TimeoutMs);
+STATIC BOOL Ps2KeyboardWaitRead(INT TimeoutMs);
+STATIC VOID Ps2KeyboardFlushBuffer(VOID);
+STATIC BOOL Ps2KeyboardSendCommand(UINT8 Cmd);
+STATIC BOOL Ps2KeyboardReadDataWithTimeout(UINT8 *Data, INT TimeoutMs);
+STATIC VOID UpdateModifiers(UINT8 RawCode, BOOL Pressed);
+STATIC CHAR ScanCodeToAscii(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers);
+STATIC VOID ProcessKeyEvent(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers);
+STATIC BOOL Ps2KeyboardDisable(VOID);
+STATIC BOOL Ps2KeyboardEnable(VOID);
+STATIC BOOL Ps2KeyboardReset(VOID);
+STATIC BOOL Ps2KeyboardSetScanCodeSet(UINT8 Set);
+STATIC UINT8 Ps2KeyboardQueryScanCodeSet(VOID);
+STATIC VOID Ps2KeyboardResetModifiers(VOID);
 
 // ============================================================================
 // QUEUE FUNCTIONS
 // ============================================================================
 
-static BOOL Ps2KeyQueuePush(const KeyEvent *Event) {
+STATIC BOOL Ps2KeyQueuePush(const KeyEvent *Event) {
     UINT32 Next = (GPs2KeyQueue.Head + 1) % PS2_KEY_QUEUE_SIZE;
     if (Next == GPs2KeyQueue.Tail) {
         GPs2.ErrorCount++;
@@ -235,7 +235,7 @@ static BOOL Ps2KeyQueuePush(const KeyEvent *Event) {
     return TRUE;
 }
 
-static BOOL Ps2KeyQueuePop(KeyEvent *Event) {
+STATIC BOOL Ps2KeyQueuePop(KeyEvent *Event) {
     if (GPs2KeyQueue.Head == GPs2KeyQueue.Tail) {
         return FALSE;
     }
@@ -248,7 +248,7 @@ static BOOL Ps2KeyQueuePop(KeyEvent *Event) {
 // HARDWARE COMMUNICATION
 // ============================================================================
 
-static BOOL Ps2KeyboardWaitWrite(INT TimeoutMs) {
+STATIC BOOL Ps2KeyboardWaitWrite(INT TimeoutMs) {
     while (TimeoutMs--) {
         if (!(Inb(PS2_PORT_STATUS) & PS2_STATUS_INPUT_FULL)) {
             return TRUE;
@@ -258,7 +258,7 @@ static BOOL Ps2KeyboardWaitWrite(INT TimeoutMs) {
     return FALSE;
 }
 
-static BOOL Ps2KeyboardWaitRead(INT TimeoutMs) {
+STATIC BOOL Ps2KeyboardWaitRead(INT TimeoutMs) {
     while (TimeoutMs--) {
         if (Inb(PS2_PORT_STATUS) & PS2_STATUS_OUTPUT_FULL) {
             return TRUE;
@@ -268,7 +268,7 @@ static BOOL Ps2KeyboardWaitRead(INT TimeoutMs) {
     return FALSE;
 }
 
-static VOID Ps2KeyboardFlushBuffer(VOID) {
+STATIC VOID Ps2KeyboardFlushBuffer(VOID) {
     INT Count = 0;
     while ((Inb(PS2_PORT_STATUS) & PS2_STATUS_OUTPUT_FULL) && Count < PS2_DRAIN_MAX_BYTES) {
         Inb(PS2_PORT_DATA);
@@ -277,7 +277,7 @@ static VOID Ps2KeyboardFlushBuffer(VOID) {
     }
 }
 
-static BOOL Ps2KeyboardSendCommand(UINT8 Cmd) {
+STATIC BOOL Ps2KeyboardSendCommand(UINT8 Cmd) {
     Ps2KeyboardFlushBuffer();
     TimerMdelay(5);
     
@@ -302,7 +302,7 @@ static BOOL Ps2KeyboardSendCommand(UINT8 Cmd) {
     return FALSE;
 }
 
-static BOOL Ps2KeyboardReadDataWithTimeout(UINT8 *Data, INT TimeoutMs) {
+STATIC BOOL Ps2KeyboardReadDataWithTimeout(UINT8 *Data, INT TimeoutMs) {
     while (TimeoutMs--) {
         if (Inb(PS2_PORT_STATUS) & PS2_STATUS_OUTPUT_FULL) {
             *Data = Inb(PS2_PORT_DATA);
@@ -317,14 +317,14 @@ static BOOL Ps2KeyboardReadDataWithTimeout(UINT8 *Data, INT TimeoutMs) {
 // Modifiers reset
 // ============================================================================
 
-static VOID Ps2KeyboardResetModifiers(VOID) {
+STATIC VOID Ps2KeyboardResetModifiers(VOID) {
     GPs2.Modifiers = 0;
     MemSet(GPs2.KeyStates, 0, sizeof(GPs2.KeyStates));
     GPs2.ExtendedPrefix = FALSE;
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: modifiers reset\n");
 }
 
-static VOID UpdateModifiers(UINT8 RawCode, BOOL Pressed) {
+STATIC VOID UpdateModifiers(UINT8 RawCode, BOOL Pressed) {
     switch (RawCode) {
         case PS2_SET1_LSHIFT:
         case PS2_SET1_RSHIFT:
@@ -368,7 +368,7 @@ static VOID UpdateModifiers(UINT8 RawCode, BOOL Pressed) {
     }
 }
 
-static CHAR ScanCodeToAscii(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers) {
+STATIC CHAR ScanCodeToAscii(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers) {
     if (!Pressed) return 0;
     if (ScanCode >= 256) return 0;
     
@@ -398,7 +398,7 @@ static CHAR ScanCodeToAscii(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers) {
 // KEY EVENT PROCESSING
 // ============================================================================
 
-static VOID ProcessKeyEvent(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers) {
+STATIC VOID ProcessKeyEvent(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers) {
     CHAR Ascii = 0;
     
     // Getting ASCII from the table
@@ -535,7 +535,7 @@ INT Ps2KeyboardDispatchEvents(VOID) {
     RETURN(Count);
 }
 
-static VOID Ps2KeyboardShutdown(KDriver *Driver) {
+STATIC VOID Ps2KeyboardShutdown(KDriver *Driver) {
     (VOID)Driver;
     
     if (GPs2.Enabled) {
@@ -550,21 +550,21 @@ static VOID Ps2KeyboardShutdown(KDriver *Driver) {
 // KEYBOARD INITIALIZATION FUNCTIONS
 // ============================================================================
 
-static BOOL Ps2KeyboardDisable(VOID) {
+STATIC BOOL Ps2KeyboardDisable(VOID) {
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: disabling...\n");
     Ps2KeyboardFlushBuffer();
     TimerMdelay(5);
     return Ps2KeyboardSendCommand(0xF5);
 }
 
-static BOOL Ps2KeyboardEnable(VOID) {
+STATIC BOOL Ps2KeyboardEnable(VOID) {
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: enabling...\n");
     Ps2KeyboardFlushBuffer();
     TimerMdelay(5);
     return Ps2KeyboardSendCommand(0xF4);
 }
 
-static BOOL Ps2KeyboardReset(VOID) {
+STATIC BOOL Ps2KeyboardReset(VOID) {
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: resetting...\n");
     
     Ps2KeyboardFlushBuffer();
@@ -605,7 +605,7 @@ static BOOL Ps2KeyboardReset(VOID) {
     return TRUE;
 }
 
-static UINT8 Ps2KeyboardQueryScanCodeSet(VOID) {
+STATIC UINT8 Ps2KeyboardQueryScanCodeSet(VOID) {
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: querying scancode set...\n");
     Ps2KeyboardFlushBuffer();
     TimerMdelay(5);
@@ -635,7 +635,7 @@ static UINT8 Ps2KeyboardQueryScanCodeSet(VOID) {
     return SetId;
 }
 
-static BOOL Ps2KeyboardSetScanCodeSet(UINT8 Set) {
+STATIC BOOL Ps2KeyboardSetScanCodeSet(UINT8 Set) {
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: setting scancode set to %d...\n", Set);
     Ps2KeyboardFlushBuffer();
     TimerMdelay(5);
@@ -774,9 +774,62 @@ INT Ps2KeyboardInit(VOID) {
     }
     
     IoapicUnmaskIrq(Gsi);
+
+    Ps2KeyboardRegisterSysDevice();
     
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: irq: gsi=%d, vector=%d\n", Gsi, KEYBOARD);
     BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: initialized successfully! (Set 1 mode via hardware translation)\n");
     
     RETURN(SUCCESS);
+}
+
+SysDevice *Ps2KeyboardRegisterSysDevice(VOID) {
+    if (!GPs2.Initialized) return NULLPTR;
+
+    // Уже зарегистрирована?
+    SysDevice *Existing = SysDeviceFind("KEYBOARD");
+    if (Existing) return Existing;
+
+    // Родитель — PS2 bus (из Ps2.c), fallback — root
+    SysDevice *Parent = Ps2GetSysDevice();
+    if (!Parent) Parent = SysDeviceGetRoot();
+    if (!Parent) return NULLPTR;
+
+    SysDevice *Dev = SysDeviceCreate(Parent,
+                                      "KEYBOARD",
+                                      "PS/2 Keyboard",
+                                      SYSDEV_TYPE_INPUT);
+    if (!Dev) return NULLPTR;
+
+    // --- Ресурсы ---
+
+    // IRQ клавиатуры (GSI + вектор)
+    if (GPs2.Gsi) {
+        SysDeviceAddResource(Dev, SYSDEV_RES_IRQ, GPs2.Gsi, 1);
+        SysDeviceSetPropU32(Dev, "gsi", GPs2.Gsi);
+    }
+    SysDeviceSetPropU32(Dev, "vector", KEYBOARD);
+
+    // --- Свойства ---
+
+    SysDeviceSetPropU32(Dev, "port", 1);
+    SysDeviceSetPropU32(Dev, "layout", (UINT32)GPs2.Layout);
+    SysDeviceSetPropU32(Dev, "scancode_set", 1);      // Set 1 (via HW translation)
+    SysDeviceSetPropU32(Dev, "modifiers", GPs2.Modifiers);
+    SysDeviceSetPropU32(Dev, "enabled", GPs2.Enabled ? 1 : 0);
+    SysDeviceSetPropU64(Dev, "event_count", GPs2.EventCount);
+    SysDeviceSetPropU64(Dev, "error_count", GPs2.ErrorCount);
+
+    // --- Привязка к KDriver ---
+
+    if (GPs2.Driver) {
+        SysDeviceBindDriver(Dev, GPs2.Driver);
+    } else {
+        SysDeviceSetState(Dev, SYSDEV_STATE_ENABLED);
+    }
+
+    BaseconPrintf(BASECON_TYPE_NORMAL,
+                  "ps2kbd: registered KEYBOARD in SysDevice\n");
+
+    return Dev;
 }

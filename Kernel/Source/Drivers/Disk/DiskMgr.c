@@ -1,17 +1,21 @@
 #include <Drivers/Disk/DiskMgr.h>
+#include <Drivers/Disk/RamDisk.h>
 #include <Drivers/Disk/Pata.h>
 #include <Drivers/Disk/Sata.h>
 #include <Mem/Allocator.h>
+#include <Mem/PageCache.h>
 #include <Lib/String.h>
 #include <Lib/StdIo.h>
 #include <Basecon.h>
 #include <Return.h>
 
-static ListHead GDiskList;
-static UINT32 GDiskCount = 0;
-static BOOL GInitialized = FALSE;
+ListHead GDiskList;
+UINT32 GDiskCount = 0;
+STATIC BOOL GInitialized = FALSE;
+STATIC SysDevice *GDiskSysRoot = NULLPTR;   // узел "DRIVE"
 
 extern VOID SataRegisterDisk(SataPort *Port, INT PortNum);
+STATIC VOID DiskMgrRegisterOneDisk(Disk *Disk);
 
 const CHAR* DiskTypeToString(DiskType Type) {
     switch (Type) {
@@ -19,6 +23,8 @@ const CHAR* DiskTypeToString(DiskType Type) {
         case DISK_TYPE_SATA: return "SATA";
         case DISK_TYPE_NVME: return "NVME";
         case DISK_TYPE_USB:  return "USB";
+	case DISK_TYPE_RAM:  return "RAM";
+	case DISK_TYPE_OPTICAL: return "OPTICAL";
         default: return "UNKNOWN";
     }
 }
@@ -65,13 +71,13 @@ VOID DiskMakeName(Disk *Disk) {
     SnPrintf(Disk->Name, sizeof(Disk->Name), "%s%u", TypeStr, Disk->Index);
 }
 
-static VOID PartitionMakeName(Partition *Part) {
+STATIC VOID PartitionMakeName(Partition *Part) {
     if (!Part || !Part->ParentDisk) return;
     SnPrintf(Part->Name, sizeof(Part->Name), "%s:%u", 
              Part->ParentDisk->Name, Part->Index);
 }
 
-static VOID DiskClearPartitions(Disk *Disk) {
+STATIC VOID DiskClearPartitions(Disk *Disk) {
     if (!Disk) return;
     
     ListHead *Pos, *Next;
@@ -225,7 +231,7 @@ INT DiskMgrRead(const CHAR *Name, UINT64 Lba, UINT32 Count, VOID *Buffer) {
     Disk *Disk = DiskMgrFindDisk(Name);
     if (!Disk || !Disk->Read) RETURN(NO_OBJECT);
     
-    return Disk->Read(Disk, Lba, Count, Buffer);
+    return PCacheRead(Disk, Lba, Count, Buffer);
 }
 
 INT DiskMgrWrite(const CHAR *Name, UINT64 Lba, UINT32 Count, const VOID *Buffer) {
@@ -237,30 +243,30 @@ INT DiskMgrWrite(const CHAR *Name, UINT64 Lba, UINT32 Count, const VOID *Buffer)
     Disk *Disk = DiskMgrFindDisk(Name);
     if (!Disk || !Disk->Write) RETURN(NO_OBJECT);
     
-    return Disk->Write(Disk, Lba, Count, Buffer);
+    return PCacheWrite(Disk, Lba, Count, Buffer);
 }
 
 INT PartitionRead(Partition *Part, UINT64 Offset, UINT32 Count, VOID *Buffer) {
     if (!Part || !Part->ParentDisk || !Part->ParentDisk->Read) RETURN(NO_OBJECT);
     if (Offset + Count > Part->SectorCount) RETURN(INCORRECT_VALUE);
     
-    return Part->ParentDisk->Read(Part->ParentDisk, 
-                                   Part->StartLba + Offset, 
-                                   Count, Buffer);
+    return PCacheRead(Part->ParentDisk,
+                      Part->StartLba + Offset,
+                      Count, Buffer);
 }
 
 INT PartitionWrite(Partition *Part, UINT64 Offset, UINT32 Count, const VOID *Buffer) {
     if (!Part || !Part->ParentDisk || !Part->ParentDisk->Write) RETURN(NO_OBJECT);
     if (Offset + Count > Part->SectorCount) RETURN(INCORRECT_VALUE);
     
-    return Part->ParentDisk->Write(Part->ParentDisk,
-                                    Part->StartLba + Offset,
-                                    Count, Buffer);
+    return PCacheWrite(Part->ParentDisk,
+                       Part->StartLba + Offset,
+                       Count, Buffer);
 }
 
 INT PartitionFlush(Partition *Part) {
     if (!Part || !Part->ParentDisk || !Part->ParentDisk->Flush) RETURN(NO_OBJECT);
-    return Part->ParentDisk->Flush(Part->ParentDisk);
+    return PCacheFlush(Part->ParentDisk);
 }
 
 UINT64 PartitionGetSize(Partition *Part) {
@@ -280,6 +286,8 @@ typedef struct {
     } ATTRIBUTE(packed) Entries[4];
     UINT16 Signature;
 } ATTRIBUTE(packed) MBRPartitionTable;
+
+
 
 INT PartitionScanMBR(Disk *Disk) {
     if (!Disk) RETURN(NO_OBJECT);
@@ -406,33 +414,83 @@ INT PartitionScanMBR(Disk *Disk) {
     RETURN(SUCCESS);
 }
 
-INT PartitionCreateMBR(Disk *Disk, UINT64 StartLba, UINT64 SectorCount, UINT8 PartitionId) {
-    if (!Disk) RETURN(NO_OBJECT);
-    if (Disk->PartitionCount >= 4) RETURN(NO_MEMORY);
-    if (SectorCount == 0) RETURN(INCORRECT_VALUE);
-    if (PartitionId == 0) RETURN(INCORRECT_VALUE);
-    
+// Инициализация MBR на пустом диске
+STATIC INT DiskInitMBR(Disk *Disk) {
     UINT8 MBR[512];
-    INT Result = Disk->Read(Disk, 0, 1, MBR);
-    if (Result != SUCCESS) RETURN(Result);
+    MemSet(MBR, 0, 512);
     
-    MBRPartitionTable *Table = (MBRPartitionTable*)MBR;
+    // Подпись 0xAA55 в конце
+    MBR[510] = 0x55;
+    MBR[511] = 0xAA;
     
-    if (Table->Signature != 0xAA55) {
+    INT Result = Disk->Write(Disk, 0, 1, MBR);
+    if (Result != SUCCESS) {
+        BaseconPrintf(BASECON_TYPE_ERROR, "diskmgr: failed to write MBR (error %d)\n", Result);
+        return Result;
+    }
+    
+    BaseconPrintf(BASECON_TYPE_NORMAL, "diskmgr: MBR initialized on %s\n", Disk->Name);
+    return SUCCESS;
+}
+
+INT PartitionCreateMBR(Disk *Disk, UINT64 StartLba, UINT64 SectorCount, UINT8 PartitionId) {
+    if (!Disk) {
+        RETURN(NO_OBJECT);
+    }
+    
+    if (Disk->PartitionCount >= 4) {
+        RETURN(NO_MEMORY);
+    }
+    if (SectorCount == 0) {
+        RETURN(INCORRECT_VALUE);
+    }
+    if (PartitionId == 0) {
         RETURN(INCORRECT_VALUE);
     }
     
+    UINT64 EndLba = StartLba + SectorCount;
+    if (EndLba > Disk->SectorCount) {
+        RETURN(INCORRECT_VALUE);
+    }
+    
+    UINT8 MBR[512];
+    INT Result = Disk->Read(Disk, 0, 1, MBR);
+    if (Result != SUCCESS) {
+        RETURN(Result);
+    }
+    
+    MBRPartitionTable *Table = (MBRPartitionTable*)MBR;
+    
+    // ============================================================
+    // ЕСЛИ MBR НЕ ИНИЦИАЛИЗИРОВАН — СОЗДАЁМ ЕГО
+    // ============================================================
+    if (Table->Signature != 0xAA55) {
+        MemSet(MBR, 0, 512);
+        MBR[510] = 0x55;
+        MBR[511] = 0xAA;
+        Table = (MBRPartitionTable*)MBR;
+        
+        Result = Disk->Write(Disk, 0, 1, MBR);
+        if (Result != SUCCESS) {
+            RETURN(Result);
+        }
+    }
+    
+    // Ищем свободный слот
     INT FreeSlot = -1;
     for (INT I = 0; I < 4; I++) {
-        if (Table->Entries[I].PartitionId == 0 || 
-            Table->Entries[I].SectorCount == 0) {
+        if (Table->Entries[I].PartitionId == 0 || Table->Entries[I].SectorCount == 0) {
             FreeSlot = I;
             break;
         }
     }
     
-    if (FreeSlot == -1) RETURN(NO_MEMORY);
+    if (FreeSlot == -1) {
+        BaseconPrintf(BASECON_TYPE_ERROR, "PartitionCreateMBR: No free slots in MBR\n");
+        RETURN(NO_MEMORY);
+    }
     
+    // Заполняем запись
     Table->Entries[FreeSlot].BootFlag = 0x00;
     Table->Entries[FreeSlot].PartitionId = PartitionId;
     Table->Entries[FreeSlot].StartLba = (UINT32)StartLba;
@@ -445,13 +503,15 @@ INT PartitionCreateMBR(Disk *Disk, UINT64 StartLba, UINT64 SectorCount, UINT8 Pa
     Table->Entries[FreeSlot].EndCHS[2] = 0xFF;
     
     Result = Disk->Write(Disk, 0, 1, MBR);
-    if (Result != SUCCESS) RETURN(Result);
+    if (Result != SUCCESS) {
+        BaseconPrintf(BASECON_TYPE_ERROR, "PartitionCreateMBR: Write MBR failed (error %d)\n", Result);
+        RETURN(Result);
+    }
     
-    // Let's rescan
+    // Пересканируем разделы
     PartitionScanMBR(Disk);
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "diskmgr: partition created on %s\n", Disk->Name);
-    
+    BaseconPrintf(BASECON_TYPE_SUCCESS, "diskmgr: partition created on %s\n", Disk->Name);
     RETURN(SUCCESS);
 }
 
@@ -520,8 +580,37 @@ INT DiskMgrRegisterDisk(Disk *Disk) {
                   Disk->Name,
                   Disk->TotalSize / (1024 * 1024),
                   Disk->PartitionCount + Disk->LogicalCount);
+
+    if (GDiskSysRoot) {
+        if (!SysDeviceFind(Disk->Name)) {
+            DiskMgrRegisterOneDisk(Disk);
+        }
+    }
     
     RETURN(SUCCESS);
+}
+
+INT DiskMgrUnregisterDisk(Disk *Dsk) {
+    if (!Dsk) return NO_OBJECT;
+    if (!GInitialized) return NO_OBJECT;
+
+    ListHead *Pos, *Next;
+    ListForEachSafe(Pos, Next, &GDiskList) {
+        Disk *D = ListEntry(Pos, Disk, Node);
+        if (D == Dsk) {
+	    if (GDiskSysRoot) {
+                SysDevice *Sd = SysDeviceFind(Dsk->Name);
+                if (Sd) {
+                    SysDeviceDestroy(Sd);
+                }
+            }
+            DiskClearPartitions(D);
+            ListDel(&D->Node);
+            GDiskCount--;
+            return SUCCESS;
+        }
+    }
+    return NOT_FOUND;
 }
 
 extern PataDrive PataDrives[4];
@@ -570,5 +659,131 @@ VOID DiskMgrInitDisks(VOID) {
     BaseconPrintf(BASECON_TYPE_NORMAL, "diskmgr: %d PATA/IDE disks found\n", PataFoundCount);
 
     DiskMgrInitSata();
+    RamDiskInit();
+
+
+    DiskMgrRegisterSysDevices();
 }
 
+SysDevice *DiskMgrGetSysDevice(VOID) {
+    return GDiskSysRoot;
+}
+
+STATIC VOID DiskMgrRegisterOneDisk(Disk *Disk) {
+    if (!Disk || !GDiskSysRoot) return;
+
+    SysDevice *Sd = SysDeviceCreate(GDiskSysRoot,
+                                     Disk->Name,
+                                     DiskTypeToString(Disk->Type),
+                                     SYSDEV_TYPE_STORAGE);
+    if (!Sd) return;
+
+    // --- Свойства ---
+
+    SysDeviceSetProp(Sd, "type", DiskTypeToString(Disk->Type));
+    SysDeviceSetPropU64(Sd, "sectors", Disk->SectorCount);
+    SysDeviceSetPropU32(Sd, "sector_size", Disk->SectorSize);
+    SysDeviceSetPropU64(Sd, "total_size", Disk->TotalSize);
+    SysDeviceSetPropU32(Sd, "partition_count", Disk->PartitionCount);
+    SysDeviceSetPropU32(Sd, "logical_count", Disk->LogicalCount);
+
+    // Если драйвер уже привязан — используем его
+    KDriver *Drv = NULLPTR;
+    switch (Disk->Type) {
+        case DISK_TYPE_PATA:    Drv = KDriverFindByName("PataDisk"); break;
+        case DISK_TYPE_SATA:    Drv = KDriverFindByName("SataDisk"); break;
+        case DISK_TYPE_RAM:     Drv = KDriverFindByName("RamDisk");  break;
+        default:                Drv = NULLPTR; break;
+    }
+
+    if (Drv) {
+        SysDeviceBindDriver(Sd, Drv);
+    } else {
+        SysDeviceSetState(Sd, SYSDEV_STATE_ENABLED);
+    }
+
+    // --- Разделы как дети диска ---
+
+    ListHead *Pos;
+
+    ListForEach(Pos, &Disk->Partitions) {
+        Partition *Part = ListEntry(Pos, Partition, Node);
+
+        SysDevice *Psd = SysDeviceCreate(Sd, Part->Name,
+                                          PartitionTypeToString(Part->Type),
+                                          SYSDEV_TYPE_STORAGE);
+        if (!Psd) continue;
+
+        SysDeviceSetProp(Psd, "partition_type",
+                         PartitionTypeToString(Part->Type));
+        SysDeviceSetProp(Psd, "partition_id",
+                         PartitionIdToString(Part->PartitionId));
+        SysDeviceSetPropHex(Psd, "start_lba", Part->StartLba);
+        SysDeviceSetPropU64(Psd, "sectors", Part->SectorCount);
+        SysDeviceSetPropU32(Psd, "sector_size", Part->SectorSize);
+        SysDeviceSetPropU64(Psd, "size_bytes", Part->SizeInBytes);
+        SysDeviceSetPropU32(Psd, "bootable", Part->Bootable ? 1 : 0);
+        SysDeviceSetState(Psd, SYSDEV_STATE_ENABLED);
+    }
+
+    ListForEach(Pos, &Disk->LogicalPartitions) {
+        Partition *Part = ListEntry(Pos, Partition, Node);
+
+        SysDevice *Psd = SysDeviceCreate(Sd, Part->Name,
+                                          PartitionTypeToString(Part->Type),
+                                          SYSDEV_TYPE_STORAGE);
+        if (!Psd) continue;
+
+        SysDeviceSetProp(Psd, "partition_type",
+                         PartitionTypeToString(Part->Type));
+        SysDeviceSetProp(Psd, "logical", "1");
+        SysDeviceSetPropHex(Psd, "start_lba", Part->StartLba);
+        SysDeviceSetPropU64(Psd, "sectors", Part->SectorCount);
+        SysDeviceSetPropU64(Psd, "size_bytes", Part->SizeInBytes);
+        SysDeviceSetState(Psd, SYSDEV_STATE_ENABLED);
+    }
+}
+
+UINT32 DiskMgrRegisterSysDevices(VOID) {
+    if (GDiskSysRoot) {
+        // Уже зарегистрировано — просто обновляем список
+        // (полезно, если после этого добавили новый RAMDisk)
+        UINT32 Count = 0;
+        Disk *D = DiskMgrGetFirst();
+        while (D) {
+            if (!SysDeviceFind(D->Name)) {
+                DiskMgrRegisterOneDisk(D);
+                Count++;
+            }
+            D = DiskMgrGetNext(D);
+        }
+        return Count;
+    }
+
+    if (!SysDeviceGetRoot()) {
+        BaseconPrintf(BASECON_TYPE_WARNING,
+                      "diskmgr: SysDevice not ready\n");
+        return 0;
+    }
+
+    // Создаём корневой узел DRIVE
+    GDiskSysRoot = SysDeviceCreate(SysDeviceGetRoot(),
+                                    "DRIVE",
+                                    "Storage devices",
+                                    SYSDEV_TYPE_BUS);
+    if (!GDiskSysRoot) return 0;
+
+    SysDeviceSetPropU32(GDiskSysRoot, "disk_count", GDiskCount);
+    SysDeviceSetState(GDiskSysRoot, SYSDEV_STATE_ENABLED);
+
+    // Регистрируем все диски
+    UINT32 Count = 0;
+    Disk *D = DiskMgrGetFirst();
+    while (D) {
+        DiskMgrRegisterOneDisk(D);
+        Count++;
+        D = DiskMgrGetNext(D);
+    }
+
+    return Count;
+}

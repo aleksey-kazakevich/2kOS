@@ -1,9 +1,11 @@
 #include <Drivers/Irq/Apic/ApicRegs.h>
 #include <Drivers/Acpi/AcpiTables.h>
 #include <Drivers/Irq/Apic/Apic.h>
+#include <Limine/LimineParse.h>
 #include <Drivers/Acpi/Acpi.h>
 #include <Drivers/Hpet.h>
 #include <Lib/String.h>
+#include <Mem/Paging.h>
 #include <Asm/Mmio.h>
 #include <Asm/Cpu.h>
 #include <KDriver.h>
@@ -12,19 +14,20 @@
 #define HPET_FS_PER_SEC         1000000000000000ULL
 #define APIC_TIMER_DIVISOR      16
 
-static struct {
+STATIC struct {
     volatile UINT8 *Base;
     UINT64 FrequencyHz;
     UINT64 PeriodFs;
+    BOOL Is64Bit;
     BOOL Available;
     KDriver *Driver;
 } GHpet = {0};
 
-static volatile UINT64 *HpetReg64(UINT32 Offset) {
+STATIC volatile UINT64 *HpetReg64(UINT32 Offset) {
     return (volatile UINT64 *)(GHpet.Base + Offset);
 }
 
-static BOOL HpetValidateTable(HPET *Table) {
+STATIC BOOL HpetValidateTable(HPET *Table) {
     if (!Table) {
         return FALSE;
     }
@@ -51,27 +54,61 @@ INT HpetInit(VOID) {
     }
 
     AcpiTable = AcpiGet();
-    if (!AcpiTable || !AcpiTable->Hpet) {
+    if (!AcpiTable) {
+        RETURN(NO_OBJECT);
+    }
+    if (!AcpiTable->Hpet) {
         RETURN(NOT_FOUND);
     }
 
     Table = AcpiTable->Hpet;
+
     if (!HpetValidateTable(Table)) {
         RETURN(INCORRECT_VALUE);
     }
 
-    GHpet.Base = (volatile UINT8 *)(UINTPTR)Table->BaseAddress;
+    UINT64 Hhdm = LimineGetHHDMOffset();
+    UINT64 PhysBase = Table->BaseAddress;
+    UINT64 VirtBase = PhysToVirt(PhysBase);
+    GHpet.Base = (volatile UINT8 *)VirtBase;
+
     Cap = MmioRead64(HpetReg64(HPET_REG_CAPABILITIES));
+
     GHpet.PeriodFs = Cap >> 32;
+    GHpet.Is64Bit = (Cap >> 13) & 1;
+
     if (GHpet.PeriodFs == 0) {
+        RETURN(INCORRECT_VALUE);
+    }
+
+    if (GHpet.PeriodFs > 100000000ULL) {
+        // Типичный period для HPET: 1..100 нс в фемтосекундах → 1e6..1e8
         RETURN(INCORRECT_VALUE);
     }
 
     GHpet.FrequencyHz = HPET_FS_PER_SEC / GHpet.PeriodFs;
 
     Config = MmioRead64(HpetReg64(HPET_REG_CONFIG));
+
     Config |= HPET_CONFIG_ENABLE;
     MmioWrite64(HpetReg64(HPET_REG_CONFIG), Config);
+
+    Config = MmioRead64(HpetReg64(HPET_REG_CONFIG));
+
+    if (!(Config & HPET_CONFIG_ENABLE)) {
+        RETURN(DEVICE_ERROR);
+    }
+
+    // Проверяем, что счётчик реально инкрементируется
+    UINT64 C1 = HpetReadCounter();
+    for (volatile INT I = 0; I < 1000000; I++) {
+        asm volatile("pause");
+    }
+    UINT64 C2 = HpetReadCounter();
+
+    if (C2 == C1) {
+        RETURN(DEVICE_ERROR);
+    }
 
     GHpet.Available = TRUE;
 
@@ -82,6 +119,8 @@ INT HpetInit(VOID) {
         }
     }
 
+    HpetRegisterSysDevice();
+
     RETURN(SUCCESS);
 }
 
@@ -90,10 +129,15 @@ BOOL HpetIsAvailable(VOID) {
 }
 
 UINT64 HpetReadCounter(VOID) {
-    if (!GHpet.Available) {
+    if (!GHpet.Base) {
         return 0;
     }
-    return MmioRead64(HpetReg64(HPET_REG_COUNTER));
+    volatile UINT64 *Reg = HpetReg64(HPET_REG_COUNTER);
+    UINT64 Val = *Reg;
+    if (!GHpet.Is64Bit) {
+        Val &= 0xFFFFFFFFULL;
+    }
+    return Val;
 }
 
 UINT64 HpetGetFrequency(VOID) {
@@ -118,15 +162,15 @@ UINT64 HpetGetMicroseconds(VOID) {
     return (HpetReadCounter() * 1000000ULL) / GHpet.FrequencyHz;
 }
 
-static UINT64 HpetTicksForUs(UINT32 Us) {
+UINT64 HpetTicksForUs(UINT32 Us) {
     return (GHpet.FrequencyHz * (UINT64)Us) / 1000000ULL;
 }
 
-static UINT64 HpetTicksForMs(UINT32 Ms) {
+UINT64 HpetTicksForMs(UINT32 Ms) {
     return (GHpet.FrequencyHz * (UINT64)Ms) / 1000ULL;
 }
 
-static VOID HpetWaitTicks(UINT64 Target) {
+STATIC VOID HpetWaitTicks(UINT64 Target) {
     while (HpetReadCounter() < Target) {
         asm volatile("pause");
     }
@@ -215,4 +259,61 @@ UINT32 HpetCalibrateApicTimer(UINT32 DesiredMs) {
     }
 
     return (ApicElapsed * APIC_TIMER_DIVISOR * 1000U) / DesiredMs;
+}
+
+SysDevice *HpetRegisterSysDevice(VOID) {
+    if (!GHpet.Available) return NULLPTR;
+
+    // Проверяем, что HPET ещё не зарегистрирован
+    SysDevice *Existing = SysDeviceFind("HPET");
+    if (Existing) return Existing;
+
+    // Родитель — ACPI bus, если он есть. Иначе — root.
+    SysDevice *Parent = AcpiGetSysDevice();
+    if (!Parent) Parent = SysDeviceGetRoot();
+    if (!Parent) return NULLPTR;
+
+    SysDevice *Dev = SysDeviceCreate(Parent,
+                                      "HPET",
+                                      "High Precision Event Timer",
+                                      SYSDEV_TYPE_TIMER);
+    if (!Dev) return NULLPTR;
+
+    // --- Ресурсы ---
+
+    // MMIO регион (обычно 1024 байта)
+    if (GHpet.Base) {
+        UINT64 HpetPhys = VirtToPhys((UINT64)(UINTPTR)GHpet.Base);
+        SysDeviceAddResource(Dev, SYSDEV_RES_MMIO, HpetPhys, 1024);
+    }
+
+    // --- Свойства ---
+
+    SysDeviceSetPropU64(Dev, "freq_hz", GHpet.FrequencyHz);
+    SysDeviceSetPropU64(Dev, "period_fs", GHpet.PeriodFs);
+    SysDeviceSetPropU32(Dev, "is_64bit", GHpet.Is64Bit ? 1 : 0);
+    SysDeviceSetPropU32(Dev, "comparators", 0);   // узнаем из Capabilities при желании
+
+    if (GHpet.Base) {
+        SysDeviceSetPropHex(Dev, "phys_addr",
+                            VirtToPhys((UINT64)(UINTPTR)GHpet.Base));
+        SysDeviceSetPropHex(Dev, "virt_addr",
+                            (UINT64)(UINTPTR)GHpet.Base);
+    }
+
+    // Считаем, сколько нс длится один тик (обратная величина частоты)
+    if (GHpet.FrequencyHz) {
+        SysDeviceSetPropU64(Dev, "tick_ns",
+                            1000000000ULL / GHpet.FrequencyHz);
+    }
+
+    // --- Привязка к KDriver ---
+
+    if (GHpet.Driver) {
+        SysDeviceBindDriver(Dev, GHpet.Driver);
+    } else {
+        SysDeviceSetState(Dev, SYSDEV_STATE_ENABLED);
+    }
+
+    return Dev;
 }

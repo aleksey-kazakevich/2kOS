@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-TOS Build System
-Создаёт два отдельных ISO:
-  - 2kOS-B.iso — для BIOS (MBR) + limine bios-install
-  - 2kOS-U.iso — для UEFI (GPT) через EFI/BOOT/BOOTX64.EFI
-"""
 
 import os
 import sys

@@ -7,11 +7,11 @@
 #include <Return.h>
 #include <Cmd.h>
 
-static ListHead GCmdList;
-static UINT32 GCmdCount = 0;
-static BOOL GInitialized = FALSE;
+STATIC ListHead GCmdList;
+STATIC UINT32 GCmdCount = 0;
+STATIC BOOL GInitialized = FALSE;
 
-static VOID CmdStripNewline(CHAR *Str) {
+STATIC VOID CmdStripNewline(CHAR *Str) {
     if (!Str) return;
     USIZE Len = StrLen(Str);
     while (Len > 0 && (Str[Len-1] == '\n' || Str[Len-1] == '\r')) {
@@ -19,7 +19,7 @@ static VOID CmdStripNewline(CHAR *Str) {
     }
 }
 
-static INT CmdParseArguments(const CHAR *CmdLine, const CHAR **ArgV, INT MaxArgs) {
+STATIC INT CmdParseArguments(const CHAR *CmdLine, const CHAR **ArgV, INT MaxArgs) {
     if (!CmdLine || !ArgV || MaxArgs < 1) return -1;
     
     INT ArgC = 0;
@@ -61,13 +61,13 @@ static INT CmdParseArguments(const CHAR *CmdLine, const CHAR **ArgV, INT MaxArgs
     return ArgC;
 }
 
-static VOID CmdFreeArguments(INT ArgC, const CHAR **ArgV) {
+STATIC VOID CmdFreeArguments(INT ArgC, const CHAR **ArgV) {
     for (INT I = 0; I < ArgC; I++) {
         MemoryFree((VOID*)ArgV[I]);
     }
 }
 
-static INT CmdRegisterInternal(const CHAR *Name, const CHAR *Description, CmdHandler Handler) {
+STATIC INT CmdRegisterInternal(const CHAR *Name, const CHAR *Description, CmdHandler Handler) {
     if (!Name || !Handler) RETURN(NO_OBJECT);
     if (CmdFind(Name)) RETURN(ALREADY_EXISTS);
     

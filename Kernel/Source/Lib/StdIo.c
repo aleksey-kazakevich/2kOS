@@ -9,14 +9,14 @@ typedef struct {
     USIZE Written;
 } PrintfState;
 
-static inline VOID OutChar(PrintfState *State, CHAR C) {
+STATIC INLINE VOID OutChar(PrintfState *State, CHAR C) {
     if (State->Written < State->Size) {
 	State->Str[State->Written] = C;
     }
     State->Written++;
 }
 
-static VOID OutString(PrintfState *State, const CHAR *S, USIZE Len) {
+STATIC VOID OutString(PrintfState *State, const CHAR *S, USIZE Len) {
     if (Len == (USIZE)-1) {
 	while (*S) {
 	    OutChar(State, *S++);
@@ -28,7 +28,7 @@ static VOID OutString(PrintfState *State, const CHAR *S, USIZE Len) {
     }
 }
 
-static VOID OutReverse(CHAR *Start, CHAR *End) {
+STATIC VOID OutReverse(CHAR *Start, CHAR *End) {
     while (Start < End) {
 	CHAR Tmp = *Start;
 	*Start++ = *End;
@@ -36,7 +36,7 @@ static VOID OutReverse(CHAR *Start, CHAR *End) {
     }
 }
 
-static CHAR *IToABase(UINT64 Num, CHAR *Buf, INT Base, INT Upper) {
+STATIC CHAR *IToABase(UINT64 Num, CHAR *Buf, INT Base, INT Upper) {
     const CHAR *DigitsLower = "0123456789abcdef";
     const CHAR *DigitsUpper = "0123456789ABCDEF";
     const CHAR *Digits = Upper ? DigitsUpper : DigitsLower;
@@ -60,7 +60,7 @@ static CHAR *IToABase(UINT64 Num, CHAR *Buf, INT Base, INT Upper) {
     return Buf;
 }
 
-static VOID OutNum(PrintfState *State, UINT64 Num, INT Base, INT Width, BOOL ZeroPad, BOOL Upper, BOOL Negative) {
+STATIC VOID OutNum(PrintfState *State, UINT64 Num, INT Base, INT Width, BOOL ZeroPad, BOOL Upper, BOOL Negative) {
     CHAR Buf[64];
     CHAR *NumStr = IToABase(Num, Buf, Base, Upper);
     INT NumLen = (INT)StrLen(NumStr);
