@@ -25,9 +25,9 @@ STATIC UINT64 ParseNum(const CHAR *S) {
         while (*S) {
             CHAR C = *S++;
             UINT8 D;
-            if (C >= '0' && C <= '9') D = C - '0';
-            else if (C >= 'a' && C <= 'f') D = C - 'a' + 10;
-            else if (C >= 'A' && C <= 'F') D = C - 'A' + 10;
+            if (C >= '0' && C <= '9') D = (UINT8)(C - '0');
+            else if (C >= 'a' && C <= 'f') D = (UINT8)(C - 'a' + 10);
+            else if (C >= 'A' && C <= 'F') D = (UINT8)(C - 'A' + 10);
             else break;
             V = (V << 4) | D;
         }

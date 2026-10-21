@@ -577,7 +577,7 @@ VOID *PhysAllocAllocateAlignedRange(PhysAlloc *P, UINT32 PageCount, UINT32 Align
                 if (Continuous == PageCount) {
                     PhysAllocMarkRangeLocked(P, StartPage, PageCount, TRUE);
                     UINT64 Addr = P->BaseAddr + (UINT64)StartPage * PAGE_SIZE;
-                    VOID *VirtAddr = (VOID*)(UINTPTR)Addr;
+                    VOID *VirtAddr = (VOID *)PhysToVirt(Addr);
                     MemSet(VirtAddr, 0, PageCount * PAGE_SIZE);
                     Result = VirtAddr;
                     goto done;

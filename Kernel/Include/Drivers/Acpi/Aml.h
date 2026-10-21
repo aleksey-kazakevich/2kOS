@@ -3,13 +3,13 @@
 #include <Drivers/Acpi/AcpiTables.h>
 #include <Types.h>
 
-
-
 // ============================================================================
-// Public API
+// Public API — high level
 // ============================================================================
 
 // AML initialization from DSDT and SSDT.
+// NOTE: Dsdt and Ssdts are PHYSICAL addresses (as in FADT/XSDT).
+// AmlInit converts them via PhysToVirt internally.
 // Parses namespace, saves methods, and is ready for execution.
 VOID AmlInit(SDTHeader *Dsdt, SDTHeader **Ssdts, INT SsdtCount);
 
@@ -38,7 +38,7 @@ const CHAR *AmlGetKind(const CHAR *Path);
 // Returns -1 in case of an error.
 INT AmlGetPackageCount(const CHAR *Path);
 
-//Read Package[index] as an Integer.
+// Read Package[index] as an Integer.
 BOOL AmlGetPackageInt(const CHAR *Path, INT Index, UINT64 *Out);
 
 // Read Package[index] as a String.
@@ -61,6 +61,10 @@ BOOL AmlGetS3SlpTyp(UINT8 *OutSlpTyp);
 
 // Utility: get \_S4 (SLP_TYP for S4).
 BOOL AmlGetS4SlpTyp(UINT8 *OutSlpTyp);
+
+// ============================================================================
+// Value model
+// ============================================================================
 
 typedef enum {
     AMLV_UNINITIALIZED = 0,
@@ -89,5 +93,30 @@ AmlValue AmlMakeInteger(UINT64 Val);
 AmlValue AmlMakeString(const CHAR *Str);
 AmlValue AmlMakeBuffer(const VOID *Data, UINT32 Len);
 
-// Call a method with arguments
+// ============================================================================
+// Method call with arguments
+// ============================================================================
+
 BOOL AmlCallMethod(const CHAR *Path, INT ArgCount, AmlValue *Args, AmlValue *Out);
+
+// Convenience: call method by path, passing integer arguments.
+BOOL AmlCallMethodInts(const CHAR *Path, INT ArgCount, UINT64 *IntArgs,
+                       UINT64 *OutInt);
+
+// ============================================================================
+// Full value access (not only Integer/String)
+// ============================================================================
+
+// Resolve a path to a full AmlValue. Method calls are executed.
+// Returns TRUE and copies the value into *Out.
+BOOL AmlGetValue(const CHAR *Path, AmlValue *Out);
+
+// ============================================================================
+// Diagnostics
+// ============================================================================
+
+// Print namespace tree to Basecon (up to MaxDepth; 0 = unlimited).
+VOID AmlDumpNamespace(UINT32 MaxDepth);
+
+// Print a single entry's kind and cached value (if any).
+VOID AmlDumpEntry(const CHAR *Path);

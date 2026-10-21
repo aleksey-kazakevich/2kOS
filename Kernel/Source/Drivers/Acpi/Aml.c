@@ -1,5 +1,6 @@
 #include <Drivers/Acpi/AcpiTables.h>
 #include <Drivers/Acpi/Aml.h>
+#include <Drivers/Pci.h>
 #include <Mem/Paging.h>
 #include <Lib/String.h>
 #include <Lib/StdIo.h>
@@ -134,7 +135,9 @@
 #define AML_MAX_OPREGIONS       64
 #define AML_MAX_FIELDS          256
 #define AML_MAX_METHOD_DEPTH    32
-#define AML_MAX_INSTRUCTIONS    100000   // anti-freeze protection
+#define AML_MAX_PARSE_DEPTH     64
+#define AML_MAX_INSTRUCTIONS    100000
+#define AML_WHILE_SAFETY        100000
 
 // ============================================================================
 // Namespace entry
@@ -168,7 +171,7 @@ struct AmlName {
 // Operation Region
 typedef struct {
     CHAR   RegionName[5];
-    UINT8  SpaceId;      // 0=Mem, 1=IO, 2=PCI_Config, 3=EC, ...
+    UINT8  SpaceId;      // 0=Mem, 1=IO, 2=PCI_Config, 3=EC, 4=SMBus, 5=CMOS, ...
     UINT64 Offset;
     UINT64 Length;
 } AmlOpRegion;
@@ -197,6 +200,30 @@ typedef struct {
 
 STATIC AmlNamespace GAml = {0};
 STATIC UINT32 GInstructionCounter = 0;
+STATIC UINT32 GMethodDepth = 0;
+
+// ============================================================================
+// Forward declarations
+// ============================================================================
+
+typedef struct AmlFrame AmlFrame;
+
+STATIC VOID ParseTermListInternal(UINT32 Parent, const UINT8 *Ptr,
+                                  const UINT8 *End, UINT32 Depth);
+STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
+                         AmlFrame *Frame, AmlValue *Out);
+STATIC BOOL CallMethod(AmlName *Method, AmlValue *Args, INT ArgCount,
+                       AmlValue *Out);
+STATIC const UINT8 *SkipTermArg(const UINT8 *P, const UINT8 *End);
+
+typedef struct AmlFrame {
+    AmlValue Locals[AML_MAX_LOCALS];
+    AmlValue Args[AML_MAX_ARGS];
+    BOOL Break;
+    BOOL Continue;
+    BOOL Returned;
+    AmlValue ReturnValue;
+} AmlFrame;
 
 // ============================================================================
 // Helpers
@@ -229,6 +256,8 @@ STATIC UINT32 ReadPkgLength(const UINT8 **Ptr, const UINT8 *End) {
     UINT8 Lead = *P++;
     UINT32 Follow = (Lead >> 6) & 0x03;
     UINT32 Length = Lead & 0x3F;
+
+    if (Follow > 3) { *Ptr = End; return 0; }   // invalid per spec
 
     if (Follow > 0) {
         Length = 0;
@@ -298,6 +327,24 @@ STATIC INT ReadNameString(const UINT8 **Ptr, const UINT8 *End,
 
 STATIC UINT32 NsAdd(UINT32 Parent, const CHAR *Segment, AmlEntryKind Kind,
                     const UINT8 *Code, UINT32 CodeLen) {
+    // Reuse existing entry in the same parent (e.g., Scope and Device share name).
+    for (UINT32 I = 0; I < GAml.Count; I++) {
+        if (GAml.Entries[I].Parent == Parent &&
+            NameSegEq(GAml.Entries[I].Segment, Segment)) {
+            AmlName *E = &GAml.Entries[I];
+            // Keep the most specific kind (don't downgrade to Scope).
+            if (E->Kind == AML_ENTRY_SCOPE && Kind != AML_ENTRY_SCOPE) {
+                E->Kind = Kind;
+            }
+            if (Code && (!E->Code || CodeLen > E->CodeLen)) {
+                E->Code = Code;
+                E->CodeLen = CodeLen;
+            }
+            E->ValueCached = FALSE;
+            return I;
+        }
+    }
+
     if (GAml.Count >= AML_MAX_NAMESPACE) return (UINT32)-1;
     UINT32 Idx = GAml.Count++;
     AmlName *E = &GAml.Entries[Idx];
@@ -348,27 +395,6 @@ STATIC UINT32 NsResolveFrom(UINT32 StartScope,
 }
 
 // ============================================================================
-// Forward declarations
-// ============================================================================
-
-typedef struct AmlFrame AmlFrame;
-
-STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End);
-STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
-                         struct AmlFrame *Frame, AmlValue *Out);
-STATIC BOOL CallMethod(AmlName *Method, AmlValue *Args, INT ArgCount,
-                       AmlValue *Out);
-
-typedef struct AmlFrame {
-    AmlValue Locals[AML_MAX_LOCALS];
-    AmlValue Args[AML_MAX_ARGS];
-    BOOL Break;
-    BOOL Continue;
-    BOOL Returned;
-    AmlValue ReturnValue;
-} AmlFrame;
-
-// ============================================================================
 // OpRegion / Field — access to hardware
 // ============================================================================
 
@@ -392,14 +418,27 @@ STATIC UINT64 OpRegionRead(AmlOpRegion *Or, UINT64 ByteOffset, UINT32 Bytes) {
             if (Bytes == 2) return Inw((UINT16)Phys);
             if (Bytes == 4) return Inl((UINT16)Phys);
             return 0;
-        case 2:     // PCI_Config — we need a PCI accessor, we don't support it yet
-        case 3:     // EmbeddedController
-        case 4:     // SMBus
-        case 5:     // SystemCMOS
-        case 6:     // PCI_BAR
-        case 7:     // IPMI
-        case 8:     // GPIO
-        case 9:     // GenericSerialBus
+
+        case 2: {   // PCI_Config
+            // AmlOpRegion stores the raw PCI address (bus<<16 | slot<<11 | fn<<8 | off)
+            // in Offset. AmlInit did not know PCI at parse time, so the offset
+            // is the raw value from the AML (Device's _ADR is usually not
+            // visible from here). We try a best-effort: interpret Offset
+            // as ECAM-style or config-space address.
+            UINT32 Addr = (UINT32)(Phys & 0xFFFFFFFF);
+            Outl(PCI_CONFIG_ADDRESS, Addr | 0x80000000);
+            if (Bytes == 1) return Inl(PCI_CONFIG_DATA) & 0xFF;
+            if (Bytes == 2) return Inl(PCI_CONFIG_DATA) & 0xFFFF;
+            return Inl(PCI_CONFIG_DATA);
+        }
+
+        case 5: {   // SystemCMOS
+            UINT8 Reg = (UINT8)(Phys & 0x7F);
+            Outb(0x70, Reg);
+            return Inb(0x71);
+        }
+
+        // 3=EmbeddedController, 4=SMBus, 6=PCI_BAR, 7=IPMI, 8=GPIO, 9=GenericSerialBus
         default:
             return 0;
     }
@@ -424,6 +463,29 @@ STATIC VOID OpRegionWrite(AmlOpRegion *Or, UINT64 ByteOffset, UINT32 Bytes, UINT
             else if (Bytes == 2) Outw((UINT16)Phys, (UINT16)Val);
             else if (Bytes == 4) Outl((UINT16)Phys, (UINT32)Val);
             return;
+
+        case 2: {
+            UINT32 Addr = (UINT32)(Phys & 0xFFFFFFFF);
+            Outl(PCI_CONFIG_ADDRESS, Addr | 0x80000000);
+            if (Bytes == 1) {
+                UINT32 Old = Inl(PCI_CONFIG_DATA);
+                Outl(PCI_CONFIG_DATA, (Old & 0xFFFFFF00) | (Val & 0xFF));
+            } else if (Bytes == 2) {
+                UINT32 Old = Inl(PCI_CONFIG_DATA);
+                Outl(PCI_CONFIG_DATA, (Old & 0xFFFF0000) | (Val & 0xFFFF));
+            } else {
+                Outl(PCI_CONFIG_DATA, (UINT32)Val);
+            }
+            return;
+        }
+
+        case 5: {
+            UINT8 Reg = (UINT8)(Phys & 0x7F);
+            Outb(0x70, Reg);
+            Outb(0x71, (UINT8)Val);
+            return;
+        }
+
         default:
             return;
     }
@@ -494,12 +556,12 @@ STATIC VOID ParseFieldList(UINT32 Parent, UINT32 RegionIdx,
             BitOffset += Bits;
             continue;
         }
-        if (B == 0x01) {
+        if (B == 0x01) {            // AccessAs
             Ptr++;
             if (Ptr + 2 <= End) Ptr += 2;
             continue;
         }
-        if (B == 0x02) {
+        if (B == 0x02) {            // ConnectField — either NameString or BufferData
             Ptr++;
             if (Ptr < End && (*Ptr == '\\' || *Ptr == '^' ||
                 *Ptr == '_' || (*Ptr >= 'A' && *Ptr <= 'Z') ||
@@ -507,18 +569,15 @@ STATIC VOID ParseFieldList(UINT32 Parent, UINT32 RegionIdx,
                 CHAR SkipSeg[8][5]; BOOL SkipRoot = FALSE;
                 ReadNameString(&Ptr, End, SkipSeg, 8, &SkipRoot);
             } else {
-                // BufferData — skip through SkipDataObject (announced below)
-                // For simplicity: we are looking for the end of buffer by PkgLength
-                if (Ptr < End) {
-                    const UINT8 *P2 = Ptr + 1;
-                    UINT32 PkgLen = ReadPkgLength(&P2, End);
-                    Ptr = P2 + PkgLen;
-                    if (Ptr > End) Ptr = End;
-                }
+                const UINT8 *P2 = Ptr;
+                (VOID)P2;
+                UINT32 PkgLen = ReadPkgLength(&Ptr, End);
+                Ptr += PkgLen;
+                if (Ptr > End) Ptr = End;
             }
             continue;
         }
-        if (B == 0x03) {
+        if (B == 0x03) {            // ExtendedAccessField
             Ptr++;
             if (Ptr + 3 <= End) Ptr += 3;
             continue;
@@ -558,12 +617,24 @@ STATIC VOID ParseFieldList(UINT32 Parent, UINT32 RegionIdx,
 }
 
 STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
+    ParseTermListInternal(Parent, Ptr, End, 0);
+}
+
+STATIC VOID ParseTermListInternal(UINT32 Parent, const UINT8 *Ptr,
+                                  const UINT8 *End, UINT32 Depth) {
+    if (Depth > AML_MAX_PARSE_DEPTH) {
+        BaseconPrintf(BASECON_TYPE_WARNING,
+                      "aml: parse depth exceeded at %p\n", Ptr);
+        return;
+    }
+
     while (Ptr < End) {
         UINT8 Op = *Ptr++;
 
         switch (Op) {
             case AML_SCOPE_OP: {
                 UINT32 PkgLen = ReadPkgLength(&Ptr, End);
+                if (PkgLen == 0) return;
                 const UINT8 *ScopeEnd = Ptr + PkgLen;
                 if (ScopeEnd > End) ScopeEnd = End;
 
@@ -590,7 +661,7 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
                     }
                 }
 
-                ParseTermList(NewParent, Ptr, ScopeEnd);
+                ParseTermListInternal(NewParent, Ptr, ScopeEnd, Depth + 1);
                 Ptr = ScopeEnd;
                 break;
             }
@@ -604,6 +675,7 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
                     Ext == AML_EXT_POWERRES_OP) {
 
                     UINT32 PkgLen = ReadPkgLength(&Ptr, End);
+                    if (PkgLen == 0) return;
                     const UINT8 *SubEnd = Ptr + PkgLen;
                     if (SubEnd > End) SubEnd = End;
 
@@ -631,11 +703,12 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
                         if (Ptr + 6 <= SubEnd) Ptr += 6;
                     }
 
-                    ParseTermList(Cur, Ptr, SubEnd);
+                    ParseTermListInternal(Cur, Ptr, SubEnd, Depth + 1);
                     Ptr = SubEnd;
                 }
                 else if (Ext == AML_EXT_OPREGION_OP) {
                     UINT32 PkgLen = ReadPkgLength(&Ptr, End);
+                    if (PkgLen == 0) return;
                     const UINT8 *OrEnd = Ptr + PkgLen;
                     if (OrEnd > End) OrEnd = End;
 
@@ -655,7 +728,6 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
 
                         // Offset — TermArg
                         if (Ptr < OrEnd) {
-                            // Quick way: let's look at the prefix
                             if (*Ptr == AML_ZERO_OP) { Or->Offset = 0; Ptr++; }
                             else if (*Ptr == AML_ONE_OP) { Or->Offset = 1; Ptr++; }
                             else if (*Ptr == AML_BYTE_PREFIX && Ptr + 2 <= OrEnd) {
@@ -675,7 +747,6 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
                                 Or->Offset = Q; Ptr += 9;
                             }
                             else {
-                                // Deferred — we will not perform, we will skip the term
                                 AmlValue tmp = AMLV_MAKE(AMLV_UNINITIALIZED);
                                 AmlFrame Sub = {0};
                                 if (!ExecTermList(Parent, &Ptr, OrEnd, &Sub, &tmp)) {
@@ -707,7 +778,6 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
                             }
                         }
 
-                        // Registering in the namespace
                         UINT32 ParentScope = IsRoot ? 0 : Parent;
                         UINT32 Cur = ParentScope;
                         for (INT K = 0; K < N - 1; K++) {
@@ -726,6 +796,7 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
                 }
                 else if (Ext == AML_EXT_FIELD_OP) {
                     UINT32 PkgLen = ReadPkgLength(&Ptr, End);
+                    if (PkgLen == 0) return;
                     const UINT8 *FldEnd = Ptr + PkgLen;
                     if (FldEnd > End) FldEnd = End;
 
@@ -734,7 +805,6 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
                     INT N = ReadNameString(&Ptr, FldEnd, Segs, 8, &IsRoot);
 
                     if (N > 0) {
-                        // Find an OpRegion by name
                         UINT32 RegionIdx = (UINT32)-1;
                         for (UINT32 R = 0; R < GAml.OpRegionCount; R++) {
                             if (NameSegEq(GAml.OpRegions[R].RegionName, Segs[N-1])) {
@@ -746,15 +816,12 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
                             RegionIdx = GAml.OpRegionCount - 1;
                         }
 
-                        // Flags: 3 bytes
                         UINT32 Flags = 0;
                         if (Ptr + 3 <= FldEnd) {
                             Flags = Ptr[0] | (Ptr[1] << 8) | (Ptr[2] << 16);
                             Ptr += 3;
                         }
 
-                        // Define the namespace parent for the fields
-                        UINT32 FieldParent = Parent;
                         UINT32 ParentScope = IsRoot ? 0 : Parent;
                         UINT32 Cur = ParentScope;
                         for (INT K = 0; K < N - 1; K++) {
@@ -765,9 +832,8 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
                             }
                             Cur = Next;
                         }
-                        FieldParent = Cur;
 
-                        ParseFieldList(FieldParent, RegionIdx, Flags, &Ptr, FldEnd);
+                        ParseFieldList(Cur, RegionIdx, Flags, &Ptr, FldEnd);
                     }
                     Ptr = FldEnd;
                 }
@@ -823,15 +889,13 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
                         const UINT8 *S = Ptr + 1;
                         while (S < End && *S) S++;
                         EstLen = (UINT32)(S - Ptr) + 1;
-                    } else if (V == AML_PACKAGE_OP || V == AML_VAR_PACKAGE_OP) {
-                        const UINT8 *P2 = Ptr + 1;
-                        UINT32 PkgLen = ReadPkgLength(&P2, End);
-                        EstLen = (UINT32)(P2 - Ptr) + PkgLen;
-                    } else if (V == AML_BUFFER_OP) {
+                    } else if (V == AML_PACKAGE_OP || V == AML_VAR_PACKAGE_OP ||
+                               V == AML_BUFFER_OP) {
                         const UINT8 *P2 = Ptr + 1;
                         UINT32 PkgLen = ReadPkgLength(&P2, End);
                         EstLen = (UINT32)(P2 - Ptr) + PkgLen;
                     } else {
+                        // Unknown term — fall through as 1 byte to make progress
                         EstLen = 1;
                     }
                 }
@@ -844,6 +908,7 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
 
             case AML_METHOD_OP: {
                 UINT32 PkgLen = ReadPkgLength(&Ptr, End);
+                if (PkgLen == 0) return;
                 const UINT8 *MethStart = Ptr;
                 const UINT8 *MethEnd = MethStart + PkgLen;
                 if (MethEnd > End) MethEnd = End;
@@ -954,14 +1019,14 @@ STATIC const UINT8 *SkipTermArg(const UINT8 *P, const UINT8 *End) {
     if (Op >= AML_LOCAL0_OP && Op <= AML_LOCAL7_OP) return P + 1;
     if (Op >= AML_ARG0_OP && Op <= AML_ARG6_OP) return P + 1;
     if (Op == AML_EXT_OP_PREFIX) {
-        if (P + 1 >= End) return NULLPTR;
+        if (P + 2 > End) return NULLPTR;
         const UINT8 *P2 = P + 2;
         UINT32 PkgLen = ReadPkgLength(&P2, End);
         const UINT8 *PkgEnd = P2 + PkgLen;
         if (PkgEnd > End) return NULLPTR;
         return PkgEnd;
     }
-    // Fallback: we believe that this is a package with PkgLength
+    // Fallback: package-like with PkgLength
     const UINT8 *P2 = P + 1;
     UINT32 PkgLen = ReadPkgLength(&P2, End);
     if (PkgLen == 0) return P + 1;
@@ -1015,7 +1080,7 @@ STATIC BOOL AmlBuiltinCall(const CHAR *Name, AmlValue *Args, INT ArgCount,
 }
 
 // ============================================================================
-// Interpreter
+// Interpreter — helpers
 // ============================================================================
 
 STATIC AmlValue EvalNameRef(UINT32 Scope, CHAR Segs[][5], INT Count, BOOL IsRoot) {
@@ -1063,6 +1128,12 @@ STATIC BOOL CallMethod(AmlName *Method, AmlValue *Args, INT ArgCount,
     if (!Method || Method->Kind != AML_ENTRY_METHOD) return FALSE;
     if (ArgCount > AML_MAX_ARGS) ArgCount = AML_MAX_ARGS;
 
+    if (GMethodDepth >= AML_MAX_METHOD_DEPTH) {
+        Out->Kind = AMLV_INTEGER;
+        Out->Integer = 0;
+        return FALSE;
+    }
+
     UINT32 MethodIdx = (UINT32)(Method - GAml.Entries);
 
     AmlFrame Frame = {0};
@@ -1077,8 +1148,11 @@ STATIC BOOL CallMethod(AmlName *Method, AmlValue *Args, INT ArgCount,
     const UINT8 *E = P + Method->CodeLen;
     AmlValue V = AMLV_MAKE(AMLV_INTEGER);
 
-    GInstructionCounter = 0;
+    // Do NOT reset GInstructionCounter here — it's the budget for the whole
+    // top-level call. Reset it only at public entry points.
+    GMethodDepth++;
     ExecTermList(MethodIdx, &P, E, &Frame, &V);
+    GMethodDepth--;
 
     if (Frame.Returned) {
         *Out = Frame.ReturnValue;
@@ -1100,7 +1174,7 @@ STATIC const UINT8 *WriteTarget(UINT32 Scope, const UINT8 *P, const UINT8 *End,
         Frame->Args[D - AML_ARG0_OP] = Val;
         return P + 1;
     }
-    if (D == 0x00) return P + 1;
+    if (D == 0x00) return P + 1;   // NullName is a no-op destination
 
     const UINT8 *P3 = P;
     CHAR Segs[8][5];
@@ -1115,13 +1189,23 @@ STATIC const UINT8 *WriteTarget(UINT32 Scope, const UINT8 *P, const UINT8 *End,
                 FieldWrite(F, Val.Integer);
                 return P3;
             }
+            // Only update Name if it wasn't a constant. ACPI Name is a
+            // constant; Store to a Name is only meaningful for fields/vars.
+            // To stay compatible with firmware that does Store(Name, X) as
+            // a "variable" idiom, we allow updating Name values, but we
+            // do NOT mark them as cached constants. This matches the
+            // behaviour of Linux's ACPICA in compatibility mode.
             E->Value = Val;
-            E->ValueCached = TRUE;
+            E->ValueCached = FALSE;
             return P3;
         }
     }
     return P;
 }
+
+// ============================================================================
+// Interpreter — term evaluation
+// ============================================================================
 
 STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                          AmlFrame *Frame, AmlValue *Out) {
@@ -1189,17 +1273,16 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                 const UINT8 *P2 = P;
                 UINT32 PkgLen = ReadPkgLength(&P2, End);
                 const UINT8 *PkgEnd = P2 + PkgLen;
-                if (PkgEnd > End) { *Ptr = End; return FALSE; }
+                if (PkgEnd > End || PkgLen == 0) { *Ptr = End; return FALSE; }
 
-                // TermArg BufferSize — skip
                 const UINT8 *SizeEnd = SkipTermArg(P2, PkgEnd);
                 if (!SizeEnd) SizeEnd = P2;
 
                 Out->Kind = AMLV_BUFFER;
-                Out->Data = SizeEnd;                    // the first byte of data
+                Out->Data = SizeEnd;
                 Out->DataLen = (UINT32)(PkgEnd - SizeEnd);
                 Out->NumElements = Out->DataLen;
-                Out->Integer = 0;
+                Out->Integer = Out->DataLen;
                 P = PkgEnd;
                 break;
             }
@@ -1209,7 +1292,7 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                 const UINT8 *P2 = P;
                 UINT32 PkgLen = ReadPkgLength(&P2, End);
                 const UINT8 *PkgEnd = P2 + PkgLen;
-                if (PkgEnd > End) { *Ptr = End; return FALSE; }
+                if (PkgEnd > End || PkgLen == 0) { *Ptr = End; return FALSE; }
 
                 UINT32 NumElem = 0;
                 if (Op == AML_PACKAGE_OP) {
@@ -1217,7 +1300,6 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                         NumElem = *P2++;
                     }
                 } else {
-                    // VarPackage: NumElements — TermArg
                     AmlValue Nv = AMLV_MAKE(AMLV_UNINITIALIZED);
                     if (ExecTermList(Scope, &P2, PkgEnd, Frame, &Nv)) {
                         NumElem = (UINT32)Nv.Integer;
@@ -1261,7 +1343,7 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                     return FALSE;
                 }
                 const UINT8 *P3 = WriteTarget(Scope, P2, End, Frame, Src);
-                if (P3 == P2 && P2 < End) P3++;    // anti-freeze protection
+                if (P3 == P2 && P2 < End) P3++;
                 P = P3;
                 *Out = Src;
                 break;
@@ -1269,6 +1351,7 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
 
             case AML_ADD_OP: case AML_SUBTRACT_OP:
             case AML_MULTIPLY_OP: case AML_AND_OP: case AML_OR_OP:
+            case AML_NAND_OP: case AML_NOR_OP:
             case AML_XOR_OP: case AML_SHIFT_LEFT_OP: case AML_SHIFT_RIGHT_OP:
             case AML_MOD_OP:
             case AML_LEQUAL_OP: case AML_LGREATER_OP: case AML_LLESS_OP:
@@ -1286,6 +1369,8 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                     case AML_MULTIPLY_OP: r = a * b; break;
                     case AML_AND_OP: r = a & b; break;
                     case AML_OR_OP:  r = a | b; break;
+                    case AML_NAND_OP: r = ~(a & b); break;
+                    case AML_NOR_OP:  r = ~(a | b); break;
                     case AML_XOR_OP: r = a ^ b; break;
                     case AML_SHIFT_LEFT_OP:  r = a << (b & 63); break;
                     case AML_SHIFT_RIGHT_OP: r = a >> (b & 63); break;
@@ -1343,14 +1428,59 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                 break;
             }
 
-            case AML_INCREMENT_OP: case AML_DECREMENT_OP: {
-                AmlValue T = {0};
+            case AML_FIND_SET_LEFT_BIT_OP:
+            case AML_FIND_SET_RIGHT_BIT_OP: {
+                AmlValue A = {0};
                 const UINT8 *P2 = P;
-                ExecTermList(Scope, &P2, End, Frame, &T);
+                ExecTermList(Scope, &P2, End, Frame, &A);
+                UINT64 v = A.Integer;
+                UINT64 r = 0xFFFFFFFFFFFFFFFFULL;
+                if (Op == AML_FIND_SET_RIGHT_BIT_OP) {
+                    for (INT I = 0; I < 64; I++) {
+                        if (v & (1ULL << I)) { r = (UINT64)I; break; }
+                    }
+                } else {
+                    for (INT I = 63; I >= 0; I--) {
+                        if (v & (1ULL << I)) { r = (UINT64)I; break; }
+                    }
+                }
+                Out->Kind = AMLV_INTEGER;
+                Out->Integer = r;
+                const UINT8 *P3 = WriteTarget(Scope, P2, End, Frame, *Out);
+                if (P3 == P2 && P2 < End) P3++;
+                P = P3;
+                break;
+            }
+
+            case AML_INCREMENT_OP: case AML_DECREMENT_OP: {
+                // Inc/Dec operand is a SuperName, not a TermArg.
+                // We read the current value through a "ReadName" path,
+                // modify, and write back. For Locals/Args this is straightforward.
+                AmlValue T = AMLV_MAKE(AMLV_UNINITIALIZED);
+                const UINT8 *P2 = P;
+                if (P2 < End) {
+                    UINT8 D = *P2;
+                    if ((D >= AML_LOCAL0_OP && D <= AML_LOCAL7_OP) && Frame) {
+                        T = Frame->Locals[D - AML_LOCAL0_OP];
+                        P2++;
+                    } else if ((D >= AML_ARG0_OP && D <= AML_ARG6_OP) && Frame) {
+                        T = Frame->Args[D - AML_ARG0_OP];
+                        P2++;
+                    } else {
+                        ExecTermList(Scope, &P2, End, Frame, &T);
+                    }
+                }
+                if (T.Kind == AMLV_UNINITIALIZED) { T.Kind = AMLV_INTEGER; T.Integer = 0; }
                 if (Op == AML_INCREMENT_OP) T.Integer++;
                 else T.Integer--;
+                const UINT8 *P3 = WriteTarget(Scope, P2 - ((P2 > P && Frame) ? 1 : 0),
+                                              End, Frame, T);
+                // Simpler: re-write using a fresh pointer at the operand start.
+                const UINT8 *OperandStart = P;
+                const UINT8 *P4 = WriteTarget(Scope, OperandStart, End, Frame, T);
+                if (P4 == OperandStart && OperandStart < End) P4++;
+                P = P4;
                 *Out = T;
-                P = P2;
                 break;
             }
 
@@ -1371,6 +1501,7 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
 
             case AML_IF_OP: {
                 UINT32 PkgLen = ReadPkgLength(&P, End);
+                if (PkgLen == 0) { *Ptr = End; return FALSE; }
                 const UINT8 *IfEnd = P + PkgLen;
                 if (IfEnd > End) IfEnd = End;
 
@@ -1386,6 +1517,7 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                 if (P < End && *P == AML_ELSE_OP) {
                     P++;
                     UINT32 E2Len = ReadPkgLength(&P, End);
+                    if (E2Len == 0) { *Ptr = End; return FALSE; }
                     const UINT8 *ElseEnd = P + E2Len;
                     if (ElseEnd > End) ElseEnd = End;
 
@@ -1400,23 +1532,26 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
 
             case AML_WHILE_OP: {
                 UINT32 PkgLen = ReadPkgLength(&P, End);
+                if (PkgLen == 0) { *Ptr = End; return FALSE; }
                 const UINT8 *LoopEnd = P + PkgLen;
                 if (LoopEnd > End) LoopEnd = End;
 
                 const UINT8 *PredStart = P;
                 INT Safety = 0;
-                while (++Safety < 100000) {
+                while (++Safety < AML_WHILE_SAFETY) {
+                    if (Frame && Frame->Returned) break;
+
                     const UINT8 *P2 = PredStart;
                     AmlValue Pred = {0};
-                    ExecTermList(Scope, &P2, LoopEnd, Frame, &Pred);
+                    if (!ExecTermList(Scope, &P2, LoopEnd, Frame, &Pred)) break;
                     if (!Pred.Integer) break;
 
                     const UINT8 *Body = P2;
-                    ExecTermList(Scope, &Body, LoopEnd, Frame, Out);
+                    if (!ExecTermList(Scope, &Body, LoopEnd, Frame, Out)) break;
 
                     if (Frame && Frame->Returned) break;
                     if (Frame && Frame->Break) { Frame->Break = FALSE; break; }
-                    if (Frame && Frame->Continue) { Frame->Continue = FALSE; continue; }
+                    if (Frame && Frame->Continue) { Frame->Continue = FALSE; }
                 }
                 P = LoopEnd;
                 break;
@@ -1434,11 +1569,93 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
             case AML_BREAK_POINT_OP:
                 break;
 
+            case AML_NOTIFY_OP: {
+                // Notify(Target, Value): both are TermArgs, no result.
+                AmlValue Tgt = {0}, Val = {0};
+                const UINT8 *P2 = P;
+                ExecTermList(Scope, &P2, End, Frame, &Tgt);
+                ExecTermList(Scope, &P2, End, Frame, &Val);
+                Out->Kind = AMLV_UNINITIALIZED;
+                P = P2;
+                break;
+            }
+
             case AML_TO_INTEGER_OP: {
                 AmlValue A = {0};
                 const UINT8 *P2 = P;
                 ExecTermList(Scope, &P2, End, Frame, &A);
                 Out->Kind = AMLV_INTEGER;
+                if (A.Kind == AMLV_STRING || A.Kind == AMLV_BUFFER) {
+                    // Parse ASCII decimal (simple)
+                    UINT64 v = 0;
+                    const UINT8 *S = A.Data;
+                    UINT32 N = A.DataLen;
+                    for (UINT32 I = 0; I < N; I++) {
+                        UINT8 C = S[I];
+                        if (C >= '0' && C <= '9') v = v * 10 + (C - '0');
+                        else break;
+                    }
+                    Out->Integer = v;
+                } else {
+                    Out->Integer = A.Integer;
+                }
+                const UINT8 *P3 = WriteTarget(Scope, P2, End, Frame, *Out);
+                if (P3 == P2 && P2 < End) P3++;
+                P = P3;
+                break;
+            }
+
+            case AML_TO_BUFFER_OP: {
+                AmlValue A = {0};
+                const UINT8 *P2 = P;
+                ExecTermList(Scope, &P2, End, Frame, &A);
+                if (A.Kind == AMLV_BUFFER) {
+                    *Out = A;
+                } else {
+                    Out->Kind = AMLV_BUFFER;
+                    Out->Data = NULLPTR;
+                    Out->DataLen = 0;
+                    Out->NumElements = 0;
+                    Out->Integer = 0;
+                }
+                const UINT8 *P3 = WriteTarget(Scope, P2, End, Frame, *Out);
+                if (P3 == P2 && P2 < End) P3++;
+                P = P3;
+                break;
+            }
+
+            case AML_TO_STRING_OP: {
+                AmlValue A = {0};
+                const UINT8 *P2 = P;
+                ExecTermList(Scope, &P2, End, Frame, &A);
+                if (A.Kind == AMLV_STRING) {
+                    *Out = A;
+                } else {
+                    Out->Kind = AMLV_STRING;
+                    Out->Data = NULLPTR;
+                    Out->DataLen = 0;
+                    Out->NumElements = 0;
+                    Out->Integer = 0;
+                }
+                const UINT8 *P3 = WriteTarget(Scope, P2, End, Frame, *Out);
+                if (P3 == P2 && P2 < End) P3++;
+                P = P3;
+                break;
+            }
+
+            case AML_TO_DECIMAL_STRING_OP:
+            case AML_TO_HEX_STRING_OP: {
+                AmlValue A = {0};
+                const UINT8 *P2 = P;
+                ExecTermList(Scope, &P2, End, Frame, &A);
+                // We don't have a string allocator here, so we return the
+                // integer value; a real string conversion would need a
+                // backing buffer. This is best-effort for firmware that
+                // never calls these from _STA/_INI.
+                Out->Kind = AMLV_STRING;
+                Out->Data = NULLPTR;
+                Out->DataLen = 0;
+                Out->NumElements = 0;
                 Out->Integer = A.Integer;
                 const UINT8 *P3 = WriteTarget(Scope, P2, End, Frame, *Out);
                 if (P3 == P2 && P2 < End) P3++;
@@ -1464,7 +1681,6 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                 const UINT8 *P2 = P;
                 ExecTermList(Scope, &P2, End, Frame, &A);
                 Out->Kind = AMLV_INTEGER;
-                // Types according to ACPI: 0=Uninit, 1=Int, 2=Str, 3=Buf, 4=Pkg, 5=Field
                 switch (A.Kind) {
                     case AMLV_INTEGER: Out->Integer = 1; break;
                     case AMLV_STRING:  Out->Integer = 2; break;
@@ -1472,6 +1688,143 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                     case AMLV_PACKAGE: Out->Integer = 4; break;
                     default:           Out->Integer = 0; break;
                 }
+                P = P2;
+                break;
+            }
+
+            case AML_CONCAT_OP:
+            case AML_CONCAT_RES_OP: {
+                // Simplified: if both are buffers, concatenate is not
+                // supported without a backing store. We return the
+                // accumulated DataLen for SIZE_OF compatibility.
+                AmlValue A = {0}, B = {0};
+                const UINT8 *P2 = P;
+                ExecTermList(Scope, &P2, End, Frame, &A);
+                ExecTermList(Scope, &P2, End, Frame, &B);
+
+                Out->Kind = AMLV_BUFFER;
+                Out->Data = NULLPTR;
+                Out->DataLen = A.DataLen + B.DataLen;
+                Out->NumElements = Out->DataLen;
+                Out->Integer = Out->DataLen;
+
+                const UINT8 *P3 = WriteTarget(Scope, P2, End, Frame, *Out);
+                if (P3 == P2 && P2 < End) P3++;
+                P = P3;
+                break;
+            }
+
+            case AML_MID_OP: {
+                AmlValue Src = {0}, Idx = {0}, Len = {0};
+                const UINT8 *P2 = P;
+                ExecTermList(Scope, &P2, End, Frame, &Src);
+                ExecTermList(Scope, &P2, End, Frame, &Idx);
+                ExecTermList(Scope, &P2, End, Frame, &Len);
+                Out->Kind = Src.Kind;
+                Out->Integer = Src.Integer;
+                Out->Data = NULLPTR;
+                Out->DataLen = 0;
+                Out->NumElements = 0;
+                P = P2;
+                break;
+            }
+
+            case AML_MATCH_OP: {
+                // Match(SearchPkg, Op1, Object1, Op2, Object2, StartIndex)
+                // We don't support package search — return ONES (not found).
+                AmlValue Tmp = {0};
+                const UINT8 *P2 = P;
+                for (int I = 0; I < 6; I++) {
+                    if (!ExecTermList(Scope, &P2, End, Frame, &Tmp)) break;
+                }
+                Out->Kind = AMLV_INTEGER;
+                Out->Integer = 0xFFFFFFFFFFFFFFFFULL;
+                P = P2;
+                break;
+            }
+
+            case AML_INDEX_OP: {
+                // Index(Buffer, Index) — returns an Integer (the byte) or a
+                // reference. We return the integer byte value.
+                AmlValue Buf = {0}, Idx = {0};
+                const UINT8 *P2 = P;
+                ExecTermList(Scope, &P2, End, Frame, &Buf);
+                ExecTermList(Scope, &P2, End, Frame, &Idx);
+                Out->Kind = AMLV_INTEGER;
+                Out->Integer = 0;
+                if (Buf.Kind == AMLV_BUFFER && Buf.Data &&
+                    Idx.Integer < Buf.DataLen) {
+                    Out->Integer = Buf.Data[Idx.Integer];
+                } else if (Buf.Kind == AMLV_STRING && Buf.Data &&
+                           Idx.Integer < Buf.DataLen) {
+                    Out->Integer = Buf.Data[Idx.Integer];
+                }
+                const UINT8 *P3 = WriteTarget(Scope, P2, End, Frame, *Out);
+                if (P3 == P2 && P2 < End) P3++;
+                P = P3;
+                break;
+            }
+
+            case AML_REF_OF_OP: {
+                AmlValue A = {0};
+                const UINT8 *P2 = P;
+                ExecTermList(Scope, &P2, End, Frame, &A);
+                // We model RefOf as a NAMEREF-ish integer pointing to the
+                // same value. Good enough for Store/RefOf idioms.
+                *Out = A;
+                P = P2;
+                break;
+            }
+
+            case AML_DEREF_OF_OP: {
+                AmlValue A = {0};
+                const UINT8 *P2 = P;
+                ExecTermList(Scope, &P2, End, Frame, &A);
+                *Out = A;
+                P = P2;
+                break;
+            }
+
+            case AML_COPY_OBJECT_OP: {
+                AmlValue Src = {0};
+                const UINT8 *P2 = P;
+                ExecTermList(Scope, &P2, End, Frame, &Src);
+                const UINT8 *P3 = WriteTarget(Scope, P2, End, Frame, Src);
+                if (P3 == P2 && P2 < End) P3++;
+                P = P3;
+                *Out = Src;
+                break;
+            }
+
+            case AML_CREATE_DWORD_FIELD_OP:
+            case AML_CREATE_WORD_FIELD_OP:
+            case AML_CREATE_BYTE_FIELD_OP:
+            case AML_CREATE_BIT_FIELD_OP:
+            case AML_CREATE_QWORD_FIELD_OP: {
+                // These create a named field. We register a Name with 0.
+                // The Arg is the source buffer, the Name is the new field.
+                AmlValue Tmp = {0};
+                const UINT8 *P2 = P;
+                ExecTermList(Scope, &P2, End, Frame, &Tmp);   // source
+                // name follows
+                CHAR Segs[8][5];
+                BOOL IsRoot = FALSE;
+                const UINT8 *P3 = P2;
+                INT N = ReadNameString(&P3, End, Segs, 8, &IsRoot);
+                if (N > 0) {
+                    UINT32 Idx = NsResolveFrom(Scope, Segs, N, IsRoot);
+                    if (Idx == (UINT32)-1) {
+                        Idx = NsAdd(Scope, Segs[N-1], AML_ENTRY_NAME, NULLPTR, 0);
+                    }
+                    if (Idx != (UINT32)-1) {
+                        GAml.Entries[Idx].Value.Kind = AMLV_INTEGER;
+                        GAml.Entries[Idx].Value.Integer = 0;
+                        GAml.Entries[Idx].ValueCached = FALSE;
+                    }
+                    P2 = P3;
+                }
+                Out->Kind = AMLV_INTEGER;
+                Out->Integer = 0;
                 P = P2;
                 break;
             }
@@ -1490,9 +1843,74 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                         break;
                     case AML_EXT_SLEEP_OP:
                     case AML_EXT_STALL_OP: {
-                        // Skip the TermArg
                         AmlValue tmp = {0};
                         ExecTermList(Scope, &P, End, Frame, &tmp);
+                        Out->Kind = AMLV_UNINITIALIZED;
+                        break;
+                    }
+                    case AML_EXT_TIMER_OP: {
+                        Out->Kind = AMLV_INTEGER;
+                        Out->Integer = 0;   // TODO: real HPET tick
+                        break;
+                    }
+                    case AML_EXT_FROM_BCD_OP: {
+                        AmlValue A = {0};
+                        const UINT8 *P2 = P;
+                        ExecTermList(Scope, &P2, End, Frame, &A);
+                        UINT64 v = A.Integer, r = 0;
+                        UINT64 mul = 1;
+                        while (v) { r += (v & 0xF) * mul; v >>= 4; mul *= 10; }
+                        Out->Kind = AMLV_INTEGER;
+                        Out->Integer = r;
+                        P = P2;
+                        break;
+                    }
+                    case AML_EXT_TO_BCD_OP: {
+                        AmlValue A = {0};
+                        const UINT8 *P2 = P;
+                        ExecTermList(Scope, &P2, End, Frame, &A);
+                        UINT64 v = A.Integer, r = 0;
+                        UINT64 shift = 0;
+                        while (v) { r |= (v % 10) << shift; v /= 10; shift += 4; }
+                        Out->Kind = AMLV_INTEGER;
+                        Out->Integer = r;
+                        P = P2;
+                        break;
+                    }
+                    case AML_EXT_COND_REF_OF_OP: {
+                        AmlValue A = {0};
+                        const UINT8 *P2 = P;
+                        ExecTermList(Scope, &P2, End, Frame, &A);
+                        *Out = A;
+                        P = P2;
+                        break;
+                    }
+                    case AML_EXT_FATAL_OP: {
+                        AmlValue Type = {0}, Code = {0}, Arg = {0};
+                        const UINT8 *P2 = P;
+                        ExecTermList(Scope, &P2, End, Frame, &Type);
+                        if (P2 + 4 <= End) {
+                            Code.Kind = AMLV_INTEGER;
+                            for (INT I = 0; I < 4; I++) {
+                                Code.Integer |= ((UINT64)P2[I]) << (8*I);
+                            }
+                            P2 += 4;
+                        }
+                        ExecTermList(Scope, &P2, End, Frame, &Arg);
+                        BaseconPrintf(BASECON_TYPE_ERROR,
+                                      "aml: fatal op type=%llu code=0x%llX arg=%llu\n",
+                                      Type.Integer, Code.Integer, Arg.Integer);
+                        Out->Kind = AMLV_INTEGER;
+                        Out->Integer = 0xFFFFFFFFFFFFFFFFULL;
+                        P = P2;
+                        break;
+                    }
+                    case AML_EXT_ACQUIRE_OP:
+                    case AML_EXT_RELEASE_OP:
+                    case AML_EXT_SIGNAL_OP:
+                    case AML_EXT_WAIT_OP: {
+                        AmlValue Tmp = {0};
+                        ExecTermList(Scope, &P, End, Frame, &Tmp);
                         Out->Kind = AMLV_UNINITIALIZED;
                         break;
                     }
@@ -1515,7 +1933,6 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                     BOOL IsRoot = FALSE;
                     INT N = ReadNameString(&P, End, Segs, 8, &IsRoot);
                     if (N > 0) {
-                        // Builtin?
                         if (N == 1) {
                             if (StrCaseCmp(Segs[0], "_OSI") == 0) {
                                 AmlValue Arg = AMLV_MAKE(AMLV_UNINITIALIZED);
@@ -1543,7 +1960,6 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                         } else if (V.Kind != AMLV_UNINITIALIZED) {
                             *Out = V;
                         } else {
-                            // Maybe a field?
                             UINT32 Idx = NsResolveFrom(Scope, Segs, N, IsRoot);
                             if (Idx != (UINT32)-1 &&
                                 GAml.Entries[Idx].Kind == AML_ENTRY_FIELD) {
@@ -1573,20 +1989,19 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
 }
 
 // ============================================================================
-// Package access (public)
+// Path resolution (public)
 // ============================================================================
 
-STATIC BOOL ResolvePath(const CHAR *Path, AmlValue *Out) {
-    if (!Path || !Out) return FALSE;
+STATIC INT ParsePath(const CHAR *Path, CHAR Segs[][5], INT MaxSegs, BOOL *IsRoot) {
+    if (!Path) return 0;
 
-    CHAR Segs[16][5];
     INT N = 0;
-    BOOL IsRoot = FALSE;
+    *IsRoot = FALSE;
 
     const CHAR *P = Path;
-    if (*P == '\\') { IsRoot = TRUE; P++; }
+    if (*P == '\\') { *IsRoot = TRUE; P++; }
 
-    while (*P && N < 16) {
+    while (*P && N < MaxSegs) {
         if (*P == '^') {
             StrCpy(Segs[N], "^");
             N++;
@@ -1603,10 +2018,18 @@ STATIC BOOL ResolvePath(const CHAR *Path, AmlValue *Out) {
         StrCpy(Segs[N], Seg);
         N++;
     }
+    return N;
+}
 
+STATIC BOOL ResolvePath(const CHAR *Path, AmlValue *Out) {
+    if (!Path || !Out) return FALSE;
+
+    CHAR Segs[16][5];
+    BOOL IsRoot = FALSE;
+    INT N = ParsePath(Path, Segs, 16, &IsRoot);
     if (N == 0) return FALSE;
 
-    UINT32 Idx = NsResolveFrom(0, Segs, N, TRUE);
+    UINT32 Idx = NsResolveFrom(0, Segs, N, IsRoot);
     if (Idx == (UINT32)-1) return FALSE;
 
     AmlName *E = &GAml.Entries[Idx];
@@ -1618,7 +2041,7 @@ STATIC BOOL ResolvePath(const CHAR *Path, AmlValue *Out) {
         return TRUE;
     }
     if (E->Kind == AML_ENTRY_NAME) {
-        AmlValue V = EvalNameRef(0, Segs, N, TRUE);
+        AmlValue V = EvalNameRef(0, Segs, N, IsRoot);
         *Out = V;
         return V.Kind != AMLV_UNINITIALIZED;
     }
@@ -1641,6 +2064,7 @@ STATIC BOOL ResolvePath(const CHAR *Path, AmlValue *Out) {
 VOID AmlInit(SDTHeader *Dsdt, SDTHeader **Ssdts, INT SsdtCount) {
     MemSet(&GAml, 0, sizeof(GAml));
     GInstructionCounter = 0;
+    GMethodDepth = 0;
 
     GAml.Count = 1;
     GAml.Entries[0].Segment[0] = '\0';
@@ -1648,17 +2072,20 @@ VOID AmlInit(SDTHeader *Dsdt, SDTHeader **Ssdts, INT SsdtCount) {
     GAml.Entries[0].Kind = AML_ENTRY_SCOPE;
 
     if (Dsdt) {
-        const UINT8 *Base = (const UINT8*)Dsdt;
-        if (Dsdt->Length >= 36) {
-            ParseTermList(0, Base + 36, Base + Dsdt->Length);
+        SDTHeader *VirtDsdt = (SDTHeader *)PhysToVirt((UINT64)Dsdt);
+        if (VirtDsdt && VirtDsdt->Length >= 36) {
+            const UINT8 *Base = (const UINT8 *)VirtDsdt;
+            ParseTermList(0, Base + 36, Base + VirtDsdt->Length);
         }
     }
 
     for (INT I = 0; I < SsdtCount; I++) {
-        SDTHeader *S = Ssdts[I];
-        if (!S || S->Length < 36) continue;
-        const UINT8 *Base = (const UINT8*)S;
-        ParseTermList(0, Base + 36, Base + S->Length);
+        SDTHeader *Phys = Ssdts[I];
+        if (!Phys) continue;
+        SDTHeader *Virt = (SDTHeader *)PhysToVirt((UINT64)Phys);
+        if (!Virt || Virt->Length < 36) continue;
+        const UINT8 *Base = (const UINT8 *)Virt;
+        ParseTermList(0, Base + 36, Base + Virt->Length);
     }
 
     BaseconPrintf(BASECON_TYPE_NORMAL,
@@ -1668,6 +2095,8 @@ VOID AmlInit(SDTHeader *Dsdt, SDTHeader **Ssdts, INT SsdtCount) {
 
 BOOL AmlExecByPath(const CHAR *Path, UINT64 *Out) {
     AmlValue V = AMLV_MAKE(AMLV_UNINITIALIZED);
+    GInstructionCounter = 0;
+    GMethodDepth = 0;
     if (!ResolvePath(Path, &V)) return FALSE;
     if (Out) *Out = V.Integer;
     return TRUE;
@@ -1680,6 +2109,8 @@ BOOL AmlGetInteger(const CHAR *Path, UINT64 *Out) {
 BOOL AmlGetString(const CHAR *Path, CHAR *Out, INT MaxLen) {
     if (!Out || MaxLen <= 0) return FALSE;
     AmlValue V = AMLV_MAKE(AMLV_UNINITIALIZED);
+    GInstructionCounter = 0;
+    GMethodDepth = 0;
     if (!ResolvePath(Path, &V)) return FALSE;
     if (V.Kind != AMLV_STRING || !V.Data) return FALSE;
 
@@ -1692,6 +2123,8 @@ BOOL AmlGetString(const CHAR *Path, CHAR *Out, INT MaxLen) {
 
 BOOL AmlFindPath(const CHAR *Path) {
     AmlValue V = AMLV_MAKE(AMLV_UNINITIALIZED);
+    GInstructionCounter = 0;
+    GMethodDepth = 0;
     return ResolvePath(Path, &V);
 }
 
@@ -1699,26 +2132,11 @@ const CHAR *AmlGetKind(const CHAR *Path) {
     if (!Path) return "Unknown";
 
     CHAR Segs[16][5];
-    INT N = 0;
     BOOL IsRoot = FALSE;
-
-    const CHAR *P = Path;
-    if (*P == '\\') { IsRoot = TRUE; P++; }
-
-    while (*P && N < 16) {
-        if (*P == '^') { StrCpy(Segs[N], "^"); N++; P++; continue; }
-        CHAR Seg[5] = {0};
-        INT K = 0;
-        while (*P && *P != '.' && K < 4) Seg[K++] = *P++;
-        if (*P == '.') P++;
-        if (K == 0) break;
-        StrCpy(Segs[N], Seg);
-        N++;
-    }
-
+    INT N = ParsePath(Path, Segs, 16, &IsRoot);
     if (N == 0) return "Unknown";
 
-    UINT32 Idx = NsResolveFrom(0, Segs, N, TRUE);
+    UINT32 Idx = NsResolveFrom(0, Segs, N, IsRoot);
     if (Idx == (UINT32)-1) return "Unknown";
 
     switch (GAml.Entries[Idx].Kind) {
@@ -1740,6 +2158,8 @@ const CHAR *AmlGetKind(const CHAR *Path) {
 
 INT AmlGetPackageCount(const CHAR *Path) {
     AmlValue V = AMLV_MAKE(AMLV_UNINITIALIZED);
+    GInstructionCounter = 0;
+    GMethodDepth = 0;
     if (!ResolvePath(Path, &V)) return -1;
     if (V.Kind != AMLV_PACKAGE) return -1;
     return (INT)V.NumElements;
@@ -1748,9 +2168,11 @@ INT AmlGetPackageCount(const CHAR *Path) {
 BOOL AmlGetPackageInt(const CHAR *Path, INT Index, UINT64 *Out) {
     if (Index < 0 || !Out) return FALSE;
     AmlValue V = AMLV_MAKE(AMLV_UNINITIALIZED);
+    GInstructionCounter = 0;
+    GMethodDepth = 0;
     if (!ResolvePath(Path, &V)) return FALSE;
     if (V.Kind != AMLV_PACKAGE || !V.Data) return FALSE;
-    if (Index >= (INT)V.NumElements) return FALSE;
+    if (V.NumElements == 0 || Index >= (INT)V.NumElements) return FALSE;
 
     const UINT8 *P = V.Data;
     const UINT8 *End = P + V.DataLen;
@@ -1773,9 +2195,11 @@ BOOL AmlGetPackageInt(const CHAR *Path, INT Index, UINT64 *Out) {
 BOOL AmlGetPackageString(const CHAR *Path, INT Index, CHAR *Out, INT MaxLen) {
     if (Index < 0 || !Out || MaxLen <= 0) return FALSE;
     AmlValue V = AMLV_MAKE(AMLV_UNINITIALIZED);
+    GInstructionCounter = 0;
+    GMethodDepth = 0;
     if (!ResolvePath(Path, &V)) return FALSE;
     if (V.Kind != AMLV_PACKAGE || !V.Data) return FALSE;
-    if (Index >= (INT)V.NumElements) return FALSE;
+    if (V.NumElements == 0 || Index >= (INT)V.NumElements) return FALSE;
 
     const UINT8 *P = V.Data;
     const UINT8 *End = P + V.DataLen;
@@ -1808,31 +2232,48 @@ BOOL AmlCallMethod(const CHAR *Path, INT ArgCount, AmlValue *Args, AmlValue *Out
     if (!Path || !Out) return FALSE;
 
     CHAR Segs[16][5];
-    INT N = 0;
     BOOL IsRoot = FALSE;
-
-    const CHAR *P = Path;
-    if (*P == '\\') { IsRoot = TRUE; P++; }
-    while (*P && N < 16) {
-        if (*P == '^') { StrCpy(Segs[N], "^"); N++; P++; continue; }
-        CHAR Seg[5] = {0};
-        INT K = 0;
-        while (*P && *P != '.' && K < 4) Seg[K++] = *P++;
-        if (*P == '.') P++;
-        if (K == 0) break;
-        StrCpy(Segs[N], Seg);
-        N++;
-    }
+    INT N = ParsePath(Path, Segs, 16, &IsRoot);
     if (N == 0) return FALSE;
 
-    UINT32 Idx = NsResolveFrom(0, Segs, N, TRUE);
+    UINT32 Idx = NsResolveFrom(0, Segs, N, IsRoot);
     if (Idx == (UINT32)-1) return FALSE;
 
     AmlName *E = &GAml.Entries[Idx];
     if (E->Kind != AML_ENTRY_METHOD) return FALSE;
 
+    GInstructionCounter = 0;
+    GMethodDepth = 0;
     return CallMethod(E, Args, ArgCount, Out);
 }
+
+BOOL AmlCallMethodInts(const CHAR *Path, INT ArgCount, UINT64 *IntArgs,
+                       UINT64 *OutInt) {
+    AmlValue Args[AML_MAX_ARGS] = {0};
+    if (ArgCount > AML_MAX_ARGS) ArgCount = AML_MAX_ARGS;
+    for (INT I = 0; I < ArgCount; I++) {
+        Args[I].Kind = AMLV_INTEGER;
+        Args[I].Integer = IntArgs[I];
+    }
+    AmlValue Out = AMLV_MAKE(AMLV_INTEGER);
+    if (!AmlCallMethod(Path, ArgCount, Args, &Out)) return FALSE;
+    if (OutInt) *OutInt = Out.Integer;
+    return TRUE;
+}
+
+BOOL AmlGetValue(const CHAR *Path, AmlValue *Out) {
+    if (!Path || !Out) return FALSE;
+    AmlValue V = AMLV_MAKE(AMLV_UNINITIALIZED);
+    GInstructionCounter = 0;
+    GMethodDepth = 0;
+    if (!ResolvePath(Path, &V)) return FALSE;
+    *Out = V;
+    return TRUE;
+}
+
+// ============================================================================
+// Value constructors
+// ============================================================================
 
 AmlValue AmlMakeInteger(UINT64 Val) {
     AmlValue V = AMLV_MAKE(AMLV_INTEGER);
@@ -1854,6 +2295,7 @@ AmlValue AmlMakeBuffer(const VOID *Data, UINT32 Len) {
     V.Data = (const UINT8 *)Data;
     V.DataLen = Len;
     V.NumElements = Len;
+    V.Integer = Len;
     return V;
 }
 
@@ -1872,6 +2314,9 @@ STATIC BOOL AmlGetNameSegByString(const CHAR *Name, CHAR *OutSeg) {
 
 BOOL AmlGetSleepSlpTyp(const CHAR *Name, UINT8 *OutSlpTyp) {
     if (!Name || !OutSlpTyp) return FALSE;
+
+    GInstructionCounter = 0;
+    GMethodDepth = 0;
 
     CHAR Seg[5];
     AmlGetNameSegByString(Name, Seg);
@@ -1909,7 +2354,6 @@ BOOL AmlGetSleepSlpTyp(const CHAR *Name, UINT8 *OutSlpTyp) {
             const UINT8 *Ptr = P;
             if (ExecTermList(Idx, &Ptr, End, &Sub, &Pkg) &&
                 Pkg.Kind == AMLV_PACKAGE) {
-                // The first element of the package
                 const UINT8 *Q = Pkg.Data;
                 const UINT8 *QEnd = Q + Pkg.DataLen;
                 AmlValue First = AMLV_MAKE(AMLV_UNINITIALIZED);
@@ -1944,4 +2388,77 @@ BOOL AmlGetS4SlpTyp(UINT8 *OutSlpTyp) {
 
 BOOL AmlGetS3SlpTyp(UINT8 *OutSlpTyp) {
     return AmlGetSleepSlpTyp("_S3", OutSlpTyp);
+}
+
+// ============================================================================
+// Diagnostics
+// ============================================================================
+
+STATIC const CHAR *EntryKindToStr(AmlEntryKind Kind) {
+    switch (Kind) {
+        case AML_ENTRY_SCOPE:       return "Scope";
+        case AML_ENTRY_NAME:        return "Name";
+        case AML_ENTRY_METHOD:      return "Method";
+        case AML_ENTRY_DEVICE:      return "Device";
+        case AML_ENTRY_ALIAS:       return "Alias";
+        case AML_ENTRY_OPREGION:    return "OpRegion";
+        case AML_ENTRY_FIELD:       return "Field";
+        case AML_ENTRY_INDEXFIELD:  return "IndexField";
+        case AML_ENTRY_BANKFIELD:   return "BankField";
+        case AML_ENTRY_PROCESSOR:   return "Processor";
+        case AML_ENTRY_POWERRES:    return "PowerRes";
+        case AML_ENTRY_THERMALZONE: return "ThermalZone";
+    }
+    return "?";
+}
+
+STATIC VOID DumpEntryRecursive(UINT32 Idx, UINT32 Depth, UINT32 MaxDepth) {
+    if (MaxDepth != 0 && Depth > MaxDepth) return;
+    if (Idx >= GAml.Count) return;
+
+    for (UINT32 I = 0; I < Depth; I++) {
+        BaseconPrintf(BASECON_TYPE_NORMAL, "  ");
+    }
+
+    AmlName *E = &GAml.Entries[Idx];
+    BaseconPrintf(BASECON_TYPE_NORMAL, "%s [%s]\n",
+                  E->Segment[0] ? E->Segment : "\\",
+                  EntryKindToStr(E->Kind));
+
+    for (UINT32 I = 0; I < GAml.Count; I++) {
+        if (GAml.Entries[I].Parent == Idx) {
+            DumpEntryRecursive(I, Depth + 1, MaxDepth);
+        }
+    }
+}
+
+VOID AmlDumpNamespace(UINT32 MaxDepth) {
+    BaseconPrintf(BASECON_TYPE_NORMAL,
+                  "aml: namespace (%u entries)\n", GAml.Count);
+    for (UINT32 I = 0; I < GAml.Count; I++) {
+        if (GAml.Entries[I].Parent == 0) {
+            DumpEntryRecursive(I, 0, MaxDepth);
+        }
+    }
+}
+
+VOID AmlDumpEntry(const CHAR *Path) {
+    if (!Path) return;
+
+    CHAR Segs[16][5];
+    BOOL IsRoot = FALSE;
+    INT N = ParsePath(Path, Segs, 16, &IsRoot);
+    if (N == 0) return;
+
+    UINT32 Idx = NsResolveFrom(0, Segs, N, IsRoot);
+    if (Idx == (UINT32)-1) {
+        BaseconPrintf(BASECON_TYPE_ERROR, "aml: not found: %s\n", Path);
+        return;
+    }
+
+    AmlName *E = &GAml.Entries[Idx];
+    BaseconPrintf(BASECON_TYPE_NORMAL,
+                  "aml: %s = %s, kind=%s, code=0x%p len=%u\n",
+                  Path, E->Segment, EntryKindToStr(E->Kind),
+                  E->Code, E->CodeLen);
 }

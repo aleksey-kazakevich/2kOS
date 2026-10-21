@@ -357,17 +357,17 @@ STATIC INT CmdDiskMgrCreate(INT ArgC, const CHAR *ArgV[]) {
     }
 
     const CHAR *DiskName = ArgV[2];
-    UINT64 SizeMB = AToI(ArgV[3]);
+    INT SizeMBInt = AToI(ArgV[3]);
+    if (SizeMBInt <= 0) {
+    	BaseconPrintf(BASECON_TYPE_ERROR, "Invalid size: %s\n", ArgV[3]);
+    	return -1;
+    }
+    UINT64 SizeMB = (UINT64)SizeMBInt;
     const CHAR *TypeName = ArgV[4];
 
     Disk *D = DiskMgrFindDisk(DiskName);
     if (!D) {
         BaseconPrintf(BASECON_TYPE_ERROR, "Disk not found: %s\n", DiskName);
-        return -1;
-    }
-
-    if (SizeMB == 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Invalid size: %s\n", ArgV[3]);
         return -1;
     }
 

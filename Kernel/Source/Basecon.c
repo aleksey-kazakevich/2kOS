@@ -83,7 +83,7 @@ STATIC VOID BaseconRedrawFullLocked(VOID) {
         StrCat(FullLine, GBasecon.Input.Buffer);
     }
 
-    UINT32 FullLen = StrLen(FullLine);
+    UINT32 FullLen = (UINT32)StrLen(FullLine);
     UINT32 LineWidth = GBasecon.Width;
     if (LineWidth == 0) LineWidth = 1;
 
@@ -104,7 +104,7 @@ STATIC VOID BaseconRedrawFullLocked(VOID) {
 
         UINT32 Y = I * FONT_LINE_HEIGHT;
         FramebufferDrawString(GBasecon.Scrollback.Lines[SrcIdx],
-                              0, Y,
+                              0, (INT32)Y,
                               GBasecon.Scrollback.Colors[SrcIdx],
                               GBasecon.Bg);
     }
@@ -130,7 +130,7 @@ STATIC VOID BaseconRedrawFullLocked(VOID) {
     }
 
     if (GBasecon.InputMode) {
-        UINT32 PromptLen = StrLen(GBasecon.Prompt);
+        UINT32 PromptLen = (UINT32)StrLen(GBasecon.Prompt);
         UINT32 CursorGlobal = PromptLen + GBasecon.Input.CursorPos;
         UINT32 CursorLine = CursorGlobal / LineWidth;
         UINT32 CursorCol = CursorGlobal % LineWidth;
@@ -141,7 +141,7 @@ STATIC VOID BaseconRedrawFullLocked(VOID) {
 
         if (CursorX < GBasecon.FB->Width &&
             CursorY + 2 <= GBasecon.FB->Height) {
-            FramebufferFillRect(CursorX, CursorY, FONT_WIDTH, 2, GBasecon.Fg);
+            FramebufferFillRect((INT32)CursorX, (INT32)CursorY, FONT_WIDTH, 2, GBasecon.Fg);
         }
     }
 
@@ -211,7 +211,7 @@ STATIC VOID BaseconPutCharLocked(CHAR C) {
     } else if (C >= 0x20 || C >= 0x80) {
         UINT32 PixelX = GBasecon.CursorX * FONT_WIDTH;
         UINT32 PixelY = GBasecon.CursorY * FONT_LINE_HEIGHT;
-        FramebufferDrawChar(C, PixelX, PixelY, GBasecon.Fg, GBasecon.Bg);
+        FramebufferDrawChar(C, (INT32)PixelX, (INT32)PixelY, GBasecon.Fg, GBasecon.Bg);
         GBasecon.CursorX++;
         if (GBasecon.CursorX >= GBasecon.Width) {
             GBasecon.CursorX = 0;
@@ -625,7 +625,7 @@ VOID BaseconProcessKey(UINT8 ScanCode, CHAR Ascii, BOOL Pressed) {
             if (GBasecon.History.Current > 0) {
                 GBasecon.History.Current--;
                 StrCpy(Buffer, GBasecon.History.Lines[GBasecon.History.Current]);
-                *Len = StrLen(Buffer);
+                *Len = (UINT32)StrLen(Buffer);
                 *CursorPos = *Len;
                 if (GBasecon.PromptFixed) BaseconRedrawFullLocked();
             }
@@ -641,7 +641,7 @@ VOID BaseconProcessKey(UINT8 ScanCode, CHAR Ascii, BOOL Pressed) {
                 } else {
                     Buffer[0] = '\0';
                 }
-                *Len = StrLen(Buffer);
+                *Len = (UINT32)StrLen(Buffer);
                 *CursorPos = *Len;
                 if (GBasecon.PromptFixed) BaseconRedrawFullLocked();
             }

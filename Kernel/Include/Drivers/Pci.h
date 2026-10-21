@@ -19,7 +19,7 @@
 // MSI address
 #define PCI_MSI_ADDRESS_APIC_BASE   0xFEE00000
 
-//==================== STRUCTURES ====================
+// ==================== STRUCTURES ====================
 
 //MSI capability structure
 typedef struct {
@@ -33,7 +33,7 @@ typedef struct {
     UINT32 PendingBits;    // pending bits
 } ATTRIBUTE(packed) PciMsi;
 
-//MSI-X capability structure
+// MSI-X capability structure
 typedef struct {
     UINT8 CapId;           // 0x11
     UINT8 NextPtr;
@@ -42,14 +42,14 @@ typedef struct {
     UINT32 PbaOffset;      // PBA BAR indicator + offset
 } ATTRIBUTE(packed) PciMsiX;
 
-//Unified structure for PCI/PCIe devices
+// Unified structure for PCI/PCIe devices
 typedef struct PciDevice {
-    //Identification
+    // Identification
     UINT8 Bus;
     UINT8 Slot;
     UINT8 Function;
     
-    //Standard PCI registers
+    // Standard PCI registers
     UINT16 VendorId;
     UINT16 DeviceId;
     UINT16 Command;
@@ -72,7 +72,7 @@ typedef struct PciDevice {
     UINT8 InterruptLine;
     UINT8 InterruptPin;
     
-    //========== PCIe SPECIFIC FIELDS ==========
+    // ========== PCIe SPECIFIC FIELDS ==========
     BOOL IsPciE;
     
     // PCIe Capability
@@ -94,9 +94,9 @@ typedef struct PciDevice {
     struct PciDevice* Next;
 } PciDevice;
 
-//==================== UNIFIED FUNCTIONS ====================
+// ==================== UNIFIED FUNCTIONS ====================
 
-/ /Initialization (works for both PCI and PCIe)
+// Initialization (works for both PCI and PCIe)
 VOID PciInit(VOID);
 
 // Read/write configuration
