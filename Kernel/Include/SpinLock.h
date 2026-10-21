@@ -36,3 +36,19 @@ STATIC INLINE VOID SpinLockReleaseUINT32(volatile UINT32 *Lock) {
 STATIC INLINE BOOL SpinLockTryAcquire(SpinLock *Lock) {
     return __sync_lock_test_and_set(&Lock->Locked, 1) == 0;
 }
+
+STATIC INLINE UINTPTR SpinLockAcquireIrq(SpinLock *Lock) {
+    UINTPTR Flags = SaveFlags();
+    LocalInterruptsDisable();
+
+    while (__sync_lock_test_and_set(&Lock->Locked, 1)) {
+        while (Lock->Locked) CpuPause();
+    }
+
+    return Flags;
+}
+
+STATIC INLINE VOID SpinLockReleaseIrq(SpinLock *Lock, UINTPTR Flags) {
+    __sync_lock_release(&Lock->Locked);
+    RestoreFlags(Flags);
+}

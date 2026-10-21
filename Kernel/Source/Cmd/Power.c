@@ -5,7 +5,7 @@
 #include <Return.h>
 
 INT CmdPowerHandler(INT ArgC, const CHAR *ArgV[]) {
-    // Проверяем аргументы
+    // Checking the arguments
     if (ArgC < 2) {
         BaseconPrintf(BASECON_TYPE_NORMAL, "Usage: power -s (shutdown) | -r (reboot)\n");
         BaseconPrintf(BASECON_TYPE_NORMAL, "  -s, --shutdown  Shutdown the system\n");
@@ -13,7 +13,7 @@ INT CmdPowerHandler(INT ArgC, const CHAR *ArgV[]) {
         return -1;
     }
     
-    // Проверяем первый аргумент
+    // Checking the first argument
     const CHAR *Option = ArgV[1];
     
     if (StrCmp(Option, "-s") == 0 || StrCmp(Option, "--shutdown") == 0) {
@@ -28,7 +28,7 @@ INT CmdPowerHandler(INT ArgC, const CHAR *ArgV[]) {
         return 0;
     }
     
-    // Неизвестная опция
+    // Unknown option
     BaseconPrintf(BASECON_TYPE_ERROR, "Unknown option: %s\n", Option);
     BaseconPrintf(BASECON_TYPE_NORMAL, "Usage: power -s | -r\n");
     return -1;

@@ -2,6 +2,7 @@
 #include <Lib/String.h>
 #include <Time/Timer.h>
 #include <Lib/StdIo.h>
+#include <SpinLock.h>
 #include <SysDevice.h>
 #include <Basecon.h>
 #include <Return.h>
@@ -10,39 +11,37 @@ STATIC ListHead GSysDeviceList;
 STATIC UINT32   GNextDeviceId = 1;
 STATIC UINT32   GDeviceCount = 0;
 STATIC SysDevice *GRootDevice = NULLPTR;
+STATIC SpinLock GSysDevLock;
 
-VOID SysDeviceInit(VOID) {
-    ListInit(&GSysDeviceList);
-    GNextDeviceId = 1;
-    GDeviceCount = 0;
-    GRootDevice = NULLPTR;
-}
+// ============================================================================
+// LOCKED INTERNAL — it is assumed that GSysDevLock has already been taken
+// ============================================================================
 
-STATIC VOID SysDeviceAddToList(SysDevice *Dev) {
+STATIC VOID SysDeviceAddToListLocked(SysDevice *Dev) {
     ListAddTail(&GSysDeviceList, &Dev->Node);
     GDeviceCount++;
 }
 
-STATIC VOID SysDeviceRemoveFromList(SysDevice *Dev) {
+STATIC VOID SysDeviceRemoveFromListLocked(SysDevice *Dev) {
     ListDel(&Dev->Node);
     if (GDeviceCount > 0) GDeviceCount--;
 }
 
-STATIC VOID SysDeviceAddToParent(SysDevice *Dev, SysDevice *Parent) {
+STATIC VOID SysDeviceAddToParentLocked(SysDevice *Dev, SysDevice *Parent) {
     if (!Parent) return;
     Dev->Parent = Parent;
     ListAddTail(&Parent->Children, &Dev->SiblingNode);
     Parent->ChildCount++;
 }
 
-STATIC VOID SysDeviceRemoveFromParent(SysDevice *Dev) {
+STATIC VOID SysDeviceRemoveFromParentLocked(SysDevice *Dev) {
     if (!Dev->Parent) return;
     ListDel(&Dev->SiblingNode);
     if (Dev->Parent->ChildCount > 0) Dev->Parent->ChildCount--;
     Dev->Parent = NULLPTR;
 }
 
-STATIC SysDevice *SysDeviceAlloc(VOID) {
+STATIC SysDevice *SysDeviceAllocLocked(VOID) {
     SysDevice *Dev = (SysDevice *)MemoryAllocate(sizeof(SysDevice));
     if (!Dev) return NULLPTR;
 
@@ -56,20 +55,73 @@ STATIC SysDevice *SysDeviceAlloc(VOID) {
     return Dev;
 }
 
-SysDevice *SysDeviceCreateRoot(const CHAR *Name) {
-    if (GRootDevice) return GRootDevice;
+STATIC VOID SysDeviceDestroyRecursiveLocked(SysDevice *Dev) {
+    // Childrens
+    ListHead *Pos, *Next;
+    ListForEachSafe(Pos, Next, &Dev->Children) {
+        SysDevice *Child = ListEntry(Pos, SysDevice, SiblingNode);
+        SysDeviceDestroyRecursiveLocked(Child);
+    }
 
-    SysDevice *Root = SysDeviceAlloc();
-    if (!Root) return NULLPTR;
+    // Unlink the driver (just reset the field, without calling external ones)
+    Dev->Driver = NULLPTR;
+
+    SysDeviceRemoveFromParentLocked(Dev);
+    SysDeviceRemoveFromListLocked(Dev);
+
+    if (GRootDevice == Dev) GRootDevice = NULLPTR;
+
+    MemoryFree(Dev);
+}
+
+STATIC VOID SysDeviceWalkRecursiveLocked(SysDevice *Dev,
+                                          SysDeviceVisitor Visitor,
+                                          VOID *UserData) {
+    if (!Dev) return;
+    Visitor(Dev, UserData);
+
+    ListHead *Pos;
+    ListForEach(Pos, &Dev->Children) {
+        SysDevice *Child = ListEntry(Pos, SysDevice, SiblingNode);
+        SysDeviceWalkRecursiveLocked(Child, Visitor, UserData);
+    }
+}
+
+// ============================================================================
+// PUBLIC API
+// ============================================================================
+
+VOID SysDeviceInit(VOID) {
+    ListInit(&GSysDeviceList);
+    GNextDeviceId = 1;
+    GDeviceCount = 0;
+    GRootDevice = NULLPTR;
+    SpinLockInit(&GSysDevLock);
+}
+
+SysDevice *SysDeviceCreateRoot(const CHAR *Name) {
+    UINTPTR Flags = SpinLockAcquireIrq(&GSysDevLock);
+
+    if (GRootDevice) {
+        SpinLockReleaseIrq(&GSysDevLock, Flags);
+        return GRootDevice;
+    }
+
+    SysDevice *Root = SysDeviceAllocLocked();
+    if (!Root) {
+        SpinLockReleaseIrq(&GSysDevLock, Flags);
+        return NULLPTR;
+    }
 
     StrnCpy(Root->Name, Name ? Name : "root", SYSDEV_NAME_MAX - 1);
     StrnCpy(Root->Description, "Root device", SYSDEV_NAME_MAX - 1);
     Root->Type = SYSDEV_TYPE_ROOT;
     Root->State = SYSDEV_STATE_ENABLED;
 
-    SysDeviceAddToList(Root);
+    SysDeviceAddToListLocked(Root);
     GRootDevice = Root;
 
+    SpinLockReleaseIrq(&GSysDevLock, Flags);
     return Root;
 }
 
@@ -79,8 +131,13 @@ SysDevice *SysDeviceCreate(SysDevice *Parent,
                            SysDeviceType Type) {
     if (!Name) return NULLPTR;
 
-    SysDevice *Dev = SysDeviceAlloc();
-    if (!Dev) return NULLPTR;
+    UINTPTR Flags = SpinLockAcquireIrq(&GSysDevLock);
+
+    SysDevice *Dev = SysDeviceAllocLocked();
+    if (!Dev) {
+        SpinLockReleaseIrq(&GSysDevLock, Flags);
+        return NULLPTR;
+    }
 
     StrnCpy(Dev->Name, Name, SYSDEV_NAME_MAX - 1);
     StrnCpy(Dev->Description, Description ? Description : Name,
@@ -88,92 +145,78 @@ SysDevice *SysDeviceCreate(SysDevice *Parent,
     Dev->Type = Type;
     Dev->State = SYSDEV_STATE_PRESENT;
 
-    SysDeviceAddToList(Dev);
-    SysDeviceAddToParent(Dev, Parent);
+    SysDeviceAddToListLocked(Dev);
+    SysDeviceAddToParentLocked(Dev, Parent);
 
+    SpinLockReleaseIrq(&GSysDevLock, Flags);
     return Dev;
-}
-
-STATIC VOID SysDeviceDestroyRecursive(SysDevice *Dev) {
-    // Сначала детей
-    ListHead *Pos, *Next;
-    ListForEachSafe(Pos, Next, &Dev->Children) {
-        SysDevice *Child = ListEntry(Pos, SysDevice, SiblingNode);
-        SysDeviceDestroyRecursive(Child);
-    }
-
-    // Отвязываем драйвер
-    if (Dev->Driver) {
-        SysDeviceUnbindDriver(Dev);
-    }
-
-    // Убираем из структур
-    SysDeviceRemoveFromParent(Dev);
-    SysDeviceRemoveFromList(Dev);
-
-    if (GRootDevice == Dev) GRootDevice = NULLPTR;
-
-    MemoryFree(Dev);
 }
 
 VOID SysDeviceDestroy(SysDevice *Dev) {
     if (!Dev) return;
-    SysDeviceDestroyRecursive(Dev);
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GSysDevLock);
+    SysDeviceDestroyRecursiveLocked(Dev);
+    SpinLockReleaseIrq(&GSysDevLock, Flags);
 }
 
 SysDevice *SysDeviceFind(const CHAR *Name) {
     if (!Name) return NULLPTR;
 
+    UINTPTR Flags = SpinLockAcquireIrq(&GSysDevLock);
+
+    SysDevice *Result = NULLPTR;
     ListHead *Pos;
     ListForEach(Pos, &GSysDeviceList) {
         SysDevice *Dev = ListEntry(Pos, SysDevice, Node);
-        if (StrCmp(Dev->Name, Name) == 0) return Dev;
+        if (StrCmp(Dev->Name, Name) == 0) {
+            Result = Dev;
+            break;
+        }
     }
-    return NULLPTR;
+
+    SpinLockReleaseIrq(&GSysDevLock, Flags);
+    return Result;
 }
 
 SysDevice *SysDeviceFindById(UINT32 Id) {
+    UINTPTR Flags = SpinLockAcquireIrq(&GSysDevLock);
+
+    SysDevice *Result = NULLPTR;
     ListHead *Pos;
     ListForEach(Pos, &GSysDeviceList) {
         SysDevice *Dev = ListEntry(Pos, SysDevice, Node);
-        if (Dev->Id == Id) return Dev;
+        if (Dev->Id == Id) {
+            Result = Dev;
+            break;
+        }
     }
-    return NULLPTR;
-}
 
-STATIC VOID SysDeviceWalkRecursive(SysDevice *Dev,
-                                   SysDeviceVisitor Visitor,
-                                   VOID *UserData) {
-    if (!Dev) return;
-    Visitor(Dev, UserData);
-
-    ListHead *Pos;
-    ListForEach(Pos, &Dev->Children) {
-        SysDevice *Child = ListEntry(Pos, SysDevice, SiblingNode);
-        SysDeviceWalkRecursive(Child, Visitor, UserData);
-    }
+    SpinLockReleaseIrq(&GSysDevLock, Flags);
+    return Result;
 }
 
 VOID SysDeviceWalkFrom(SysDevice *Root, SysDeviceVisitor Visitor, VOID *UserData) {
     if (!Root || !Visitor) return;
-    SysDeviceWalkRecursive(Root, Visitor, UserData);
-}
 
-STATIC VOID SysDeviceWalkTopLevel(SysDevice *Dev, VOID *UserData) {
-    (VOID)UserData;
-    SysDeviceWalkRecursive(Dev, (SysDeviceVisitor)UserData, NULLPTR);
+    UINTPTR Flags = SpinLockAcquireIrq(&GSysDevLock);
+    SysDeviceWalkRecursiveLocked(Root, Visitor, UserData);
+    SpinLockReleaseIrq(&GSysDevLock, Flags);
 }
 
 VOID SysDeviceWalk(SysDeviceVisitor Visitor, VOID *UserData) {
     if (!Visitor) return;
 
-    // Проходим по всем устройствам (top-level: у кого Parent == NULL)
+    UINTPTR Flags = SpinLockAcquireIrq(&GSysDevLock);
+
     ListHead *Pos;
     ListForEach(Pos, &GSysDeviceList) {
         SysDevice *Dev = ListEntry(Pos, SysDevice, Node);
-        if (Dev->Parent) continue;   // это не корень
-        SysDeviceWalkRecursive(Dev, Visitor, UserData);
+        if (Dev->Parent) continue;
+        SysDeviceWalkRecursiveLocked(Dev, Visitor, UserData);
     }
+
+    SpinLockReleaseIrq(&GSysDevLock, Flags);
 }
 
 const CHAR *SysDeviceStateToString(SysDeviceState State) {
@@ -203,6 +246,8 @@ const CHAR *SysDeviceTypeToString(SysDeviceType Type) {
         case SYSDEV_TYPE_INTERRUPT:   return "interrupt";
         case SYSDEV_TYPE_POWER:       return "power";
         case SYSDEV_TYPE_VIRTUAL:     return "virtual";
+        case SYSDEV_TYPE_CPU:         return "cpu";
+        case SYSDEV_TYPE_CORE:        return "core";
         default:                      return "unknown";
     }
 }
@@ -316,7 +361,13 @@ const CHAR *SysDeviceGetProp(SysDevice *Dev, const CHAR *Name) {
     return P ? P->Value : NULLPTR;
 }
 
+// ============================================================================
+// QUERIES
+// ============================================================================
+
 UINT32 SysDeviceGetCount(VOID) {
+    // Atomic read — GDeviceCount changes only under GSysDevLock,
+    // but reading a 32-bit value is atomic on x86_64.
     return GDeviceCount;
 }
 
@@ -327,7 +378,6 @@ SysDevice *SysDeviceGetRoot(VOID) {
 VOID SysDeviceGetPath(SysDevice *Dev, CHAR *Buf, USIZE BufSize) {
     if (!Dev || !Buf || BufSize == 0) return;
 
-    // Собираем путь от корня к Dev
     SysDevice *Stack[32];
     INT Depth = 0;
     SysDevice *Cur = Dev;

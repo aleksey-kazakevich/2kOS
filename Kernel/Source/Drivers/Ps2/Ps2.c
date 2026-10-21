@@ -454,7 +454,7 @@ SysDevice *Ps2GetSysDevice(VOID) {
 SysDevice *Ps2RegisterSysDevice(VOID) {
     if (!GPs2Controller.Initialized) return NULLPTR;
 
-    // Уже зарегистрирован?
+    // Already registered?
     if (GPs2SysRoot) return GPs2SysRoot;
 
     SysDevice *Parent = SysDeviceGetRoot();
@@ -466,7 +466,7 @@ SysDevice *Ps2RegisterSysDevice(VOID) {
                                    SYSDEV_TYPE_BUS);
     if (!GPs2SysRoot) return NULLPTR;
 
-    // --- Свойства контроллера ---
+    // Controller properties
 
     SysDeviceSetPropU32(GPs2SysRoot, "dual_channel",
                         GPs2Controller.DualChannel ? 1 : 0);
@@ -479,7 +479,7 @@ SysDevice *Ps2RegisterSysDevice(VOID) {
 
     SysDeviceSetState(GPs2SysRoot, SYSDEV_STATE_ENABLED);
 
-    // --- Привязка к KDriver ---
+    // Linking to KDriver
 
     KDriver *Drv = KDriverFindByName("PS/2");
     if (Drv) {

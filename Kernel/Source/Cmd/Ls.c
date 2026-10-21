@@ -6,7 +6,7 @@
 #include <Return.h>
 #include <Rgb.h>
 
-// Цвета
+// Colors
 #define LS_DIR   RGB_CORNFLOWER_BLUE
 #define LS_FILE  RGB_GRAY
 #define LS_ERR   RGB_RED
@@ -24,7 +24,7 @@ INT CmdLsHandler(INT ArgC, const CHAR *ArgV[]) {
     INT Count = 0;
     const CHAR *Path = NULLPTR;
 
-    // Парсим аргумент (только путь, без опций — пока)
+    // Parsim argument (path only, no options — for now)
     for (INT I = 1; I < ArgC; I++) {
         if (ArgV[I][0] == '-') {
             BaseconPrintf(BASECON_TYPE_ERROR, "Unknown option: %s\n", ArgV[I]);
@@ -34,7 +34,7 @@ INT CmdLsHandler(INT ArgC, const CHAR *ArgV[]) {
         Path = ArgV[I];
     }
 
-    // Открываем директорию
+    // Opening the directory
     if (!Path) {
         Dir = VfsCurrentDir;
         VfsInodeRef(Dir);
@@ -50,17 +50,17 @@ INT CmdLsHandler(INT ArgC, const CHAR *ArgV[]) {
         }
     }
 
-    // Пробегаем по содержимому и выводим в одну строку через пробел
+    // We run through the content and output it in one line separated by a space.
     FramebufferColor PrevColor = RGB_GRAY;
     BaseconSetColors(LS_FILE, RGB_BLACK);
 
     while (VfsReadDir(Dir, &Pos, Name, &NameLen, &Type) == 0) {
-        // Пропускаем . и ..
+        // Skip . and ..
         if (StrCmp(Name, ".") == 0 || StrCmp(Name, "..") == 0)
             continue;
 
         if (Count > 0)
-            BaseconPrintf(BASECON_TYPE_NORMAL, "  ");  // 2 пробела между именами
+            BaseconPrintf(BASECON_TYPE_NORMAL, "  ");  // 2 spaces between names
 
         if (Type == FT_DIR) {
             BaseconSetColors(LS_DIR, RGB_BLACK);

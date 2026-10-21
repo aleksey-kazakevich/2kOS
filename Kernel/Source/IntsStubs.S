@@ -73,4 +73,13 @@ IsrStub 29
 IsrStub 30
 IsrStub 31
 
+.global IsrStubGeneric
+IsrStubGeneric:
+    iretq
+	
+.global IsrStubGenericError
+IsrStubGenericError:
+    add $8, %rsp
+    iretq
+
 .section .note.GNU-stack

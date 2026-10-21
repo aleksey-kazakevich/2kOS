@@ -72,6 +72,10 @@
 #define USER_STACK_TOP    0x00007FFFFFF000ULL
 #define USER_STACK_DEFAULT (16ULL * PAGE_SIZE)
 
+#define USER_HEAP_START   0x0000000000600000ULL
+#define USER_HEAP_GUARD   PAGE_SIZE
+#define USER_HEAP_MAX     (USER_STACK_TOP - USER_STACK_DEFAULT - USER_HEAP_GUARD)
+
 #define PAGE_ALIGN_UP(N)  (((USIZE)(N) + PAGE_SIZE - 1) & ~(USIZE)(PAGE_SIZE - 1))
 
 // ============================================================================

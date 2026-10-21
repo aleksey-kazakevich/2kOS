@@ -10,18 +10,18 @@
 #define RAMDISK_SECTOR_SIZE 512
 
 typedef struct {
-    VOID  *VirtAddr;        // виртуальный адрес (HHDM)
-    UINT64 PhysAddr;        // физический адрес начала (для справки)
+    VOID  *VirtAddr;        // Virtual address (HHDM)
+    UINT64 PhysAddr;        // The physical address of the origin (for reference)
     UINT64 SizeBytes;
     UINT64 SectorCount;
-    UINT32 Pages;           // сколько страниц выделено
+    UINT32 Pages;           // how many pages are allocated
     UINT32 RefCount;
 } RamDiskData;
 
 static RamDiskData GRamDisks[RAMDISK_MAX_COUNT];
 
 /* ============================================================================
- * Read / Write — работают с HHDM-адресом напрямую
+ * Read/Write — work with the HHDM address directly
  * ============================================================================ */
 
 static INT RamDiskRead(Disk *Self, UINT64 Lba, UINT32 Count, VOID *Buf) {
@@ -67,12 +67,12 @@ Disk *RamDiskCreate(const CHAR *Name, UINT64 SizeBytes) {
     if (!Name || Name[0] == '\0') return NULLPTR;
     if (SizeBytes == 0) return NULLPTR;
 
-    // Выравниваем по странице (PAGE_SIZE)
+    // Align to the page (PAGE_SIZE)
     SizeBytes = (SizeBytes + PAGE_SIZE - 1) & ~(UINT64)(PAGE_SIZE - 1);
     UINT64 Sectors = SizeBytes / RAMDISK_SECTOR_SIZE;
     UINT32 Pages = (UINT32)(SizeBytes / PAGE_SIZE);
 
-    // Ищем свободный слот
+    // Looking for a free slot
     INT Slot = -1;
     for (INT I = 0; I < RAMDISK_MAX_COUNT; I++) {
         if (!GRamDisks[I].VirtAddr) {
@@ -85,11 +85,6 @@ Disk *RamDiskCreate(const CHAR *Name, UINT64 SizeBytes) {
         return NULLPTR;
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // Выделяем через PMM — непрерывные физические страницы
-    // PhysAllocAllocateRange возвращает виртуальный адрес (HHDM)
-    // и уже обнуляет память (MemSet внутри).
-    // ═══════════════════════════════════════════════════════════════
     VOID *Virt = PhysAllocAllocateRange(PhysAllocGet(), Pages);
     if (!Virt) {
         BaseconPrintf(BASECON_TYPE_ERROR,
@@ -100,7 +95,7 @@ Disk *RamDiskCreate(const CHAR *Name, UINT64 SizeBytes) {
 
     UINT64 Phys = VirtToPhys((UINT64)Virt);
 
-    // Заполняем слот
+    // Filling in the slot
     GRamDisks[Slot].VirtAddr = Virt;
     GRamDisks[Slot].PhysAddr = Phys;
     GRamDisks[Slot].SizeBytes = SizeBytes;
@@ -108,7 +103,7 @@ Disk *RamDiskCreate(const CHAR *Name, UINT64 SizeBytes) {
     GRamDisks[Slot].Pages = Pages;
     GRamDisks[Slot].RefCount = 1;
 
-    // Создаём Disk
+    // Creating a Disk
     Disk *D = (Disk *)MemoryAllocate(sizeof(Disk));
     if (!D) {
         PhysAllocFreeRange(PhysAllocGet(), Virt, Pages);
@@ -131,7 +126,7 @@ Disk *RamDiskCreate(const CHAR *Name, UINT64 SizeBytes) {
     ListInit(&D->Partitions);
     ListInit(&D->LogicalPartitions);
 
-    // Регистрируем
+    // Registering
     INT Ret = DiskMgrRegisterDisk(D);
     if (Ret != SUCCESS) {
         PhysAllocFreeRange(PhysAllocGet(), Virt, Pages);

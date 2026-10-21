@@ -6,6 +6,7 @@
 #include <Lib/StdIo.h>
 #include <Scheduler.h>
 #include <Basecon.h>
+#include <SpinLock.h>
 #include <Return.h>
 #include <Rgb.h>
 
@@ -15,30 +16,39 @@ STATIC Basecon GBasecon = {0};
 STATIC BaseconInputCallback GInputCallback = NULLPTR;
 STATIC VOID *GInputCallbackUserData = NULLPTR;
 STATIC BOOL GBaseconSubscribed = FALSE;
+STATIC volatile BOOL GRunning = TRUE;
+STATIC Task *GConsoleTask = NULLPTR;
 
-// ============================================================================
-// PROTOTYPES OF INTERNAL FUNCTIONS
-// ============================================================================
+STATIC struct {
+    BaseconKeyEvent Events[BASECON_KEY_QUEUE_SIZE];
+    volatile UINT32 Head;
+    volatile UINT32 Tail;
+    volatile BOOL Blocked;
+    SpinLock Lock;
+} GKeyQueue = {0};
 
 STATIC VOID KeyboardHandler(KeyEvent *Event, VOID *UserData);
 
 // ============================================================================
-// SCROLLBACK
+// LOCKED INTERNAL HELPERS (without lock)
 // ============================================================================
 
-VOID BaseconAddToScrollback(const CHAR *Str) {
+STATIC VOID BaseconPutCharLocked(CHAR C);
+STATIC VOID BaseconRedrawFullLocked(VOID);
+
+STATIC VOID BaseconAddToScrollbackLocked(const CHAR *Str) {
     if (!Str || !Str[0]) return;
     if (!GBasecon.Initialized) return;
     if (!GBasecon.PromptFixed) return;
-    
+
     CHAR Buffer[1024];
     CHAR *SavePtr = NULLPTR;
-    
+
     StrnCpy(Buffer, Str, sizeof(Buffer) - 1);
     Buffer[sizeof(Buffer) - 1] = '\0';
-    
-    FramebufferColor LineColor = GBasecon.Fg;  // ← сохраняем текущий цвет
-    
+
+    FramebufferColor LineColor = GBasecon.Fg;
+
     CHAR *Line = StrTokR(Buffer, "\n", &SavePtr);
     while (Line) {
         if (GBasecon.Scrollback.Count < BASECON_SCROLLBACK_SIZE) {
@@ -47,9 +57,9 @@ VOID BaseconAddToScrollback(const CHAR *Str) {
             GBasecon.Scrollback.Count++;
         } else {
             for (UINT32 I = 0; I < BASECON_SCROLLBACK_SIZE - 1; I++) {
-                StrCpy(GBasecon.Scrollback.Lines[I], 
+                StrCpy(GBasecon.Scrollback.Lines[I],
                        GBasecon.Scrollback.Lines[I + 1]);
-                GBasecon.Scrollback.Colors[I] = 
+                GBasecon.Scrollback.Colors[I] =
                     GBasecon.Scrollback.Colors[I + 1];
             }
             StrCpy(GBasecon.Scrollback.Lines[BASECON_SCROLLBACK_SIZE - 1], Line);
@@ -57,186 +67,136 @@ VOID BaseconAddToScrollback(const CHAR *Str) {
         }
         Line = StrTokR(NULLPTR, "\n", &SavePtr);
     }
-    
-    BaseconRedrawFull();
+
+    BaseconRedrawFullLocked();
 }
 
-// ============================================================================
-// REDRAW
-// ============================================================================
-
-VOID BaseconRedrawFull(VOID) {
+STATIC VOID BaseconRedrawFullLocked(VOID) {
     if (!GBasecon.Initialized || !BaseconEnabled) return;
     if (!GBasecon.PromptFixed) return;
-    
+
     FramebufferClear(GBasecon.Bg);
-    
-    // Считаем, сколько строк нужно для промпта с учётом переноса
+
     CHAR FullLine[BASECON_INPUT_BUFFER_SIZE + 128];
     StrCpy(FullLine, GBasecon.Prompt);
     if (GBasecon.InputMode) {
         StrCat(FullLine, GBasecon.Input.Buffer);
     }
-    
+
     UINT32 FullLen = StrLen(FullLine);
     UINT32 LineWidth = GBasecon.Width;
     if (LineWidth == 0) LineWidth = 1;
-    
+
     UINT32 NumPromptLines = (FullLen + LineWidth - 1) / LineWidth;
     if (NumPromptLines == 0) NumPromptLines = 1;
-    
-    // Сколько строк остаётся под историю
+
     UINT32 MaxDisplayLines = GBasecon.Height - NumPromptLines;
     if (MaxDisplayLines > GBasecon.Height) MaxDisplayLines = 0;
-    
+
     UINT32 StartLine = 0;
     if (GBasecon.Scrollback.Count > MaxDisplayLines) {
         StartLine = GBasecon.Scrollback.Count - MaxDisplayLines;
     }
-    
-    // ─── Рисуем историю ───
+
     for (UINT32 I = 0; I < MaxDisplayLines; I++) {
         UINT32 SrcIdx = StartLine + I;
         if (SrcIdx >= GBasecon.Scrollback.Count) break;
-        
+
         UINT32 Y = I * FONT_LINE_HEIGHT;
-        FramebufferDrawString(GBasecon.Scrollback.Lines[SrcIdx], 
-                              0, Y, 
+        FramebufferDrawString(GBasecon.Scrollback.Lines[SrcIdx],
+                              0, Y,
                               GBasecon.Scrollback.Colors[SrcIdx],
                               GBasecon.Bg);
     }
-    
-    // ─── Рисуем промпт с переносом ───
+
     UINT32 PromptBaseY = MaxDisplayLines * FONT_LINE_HEIGHT;
-    
+
     for (UINT32 LineIdx = 0; LineIdx < NumPromptLines; LineIdx++) {
         UINT32 StartChar = LineIdx * LineWidth;
         UINT32 CharsThisLine = FullLen - StartChar;
         if (CharsThisLine > LineWidth) CharsThisLine = LineWidth;
         if (CharsThisLine == 0 && LineIdx > 0) break;
-        
+
         CHAR LineBuf[BASECON_INPUT_BUFFER_SIZE + 128];
         StrnCpy(LineBuf, FullLine + StartChar, CharsThisLine);
         LineBuf[CharsThisLine] = '\0';
-        
+
         INT32 DrawY = (INT32)PromptBaseY + (INT32)(LineIdx * FONT_LINE_HEIGHT);
-        
-        // Очищаем строку перед рисованием
-        FramebufferFillRect(0, DrawY, GBasecon.FB->Width, FONT_LINE_HEIGHT, 
+
+        FramebufferFillRect(0, DrawY, GBasecon.FB->Width, FONT_LINE_HEIGHT,
                             GBasecon.Bg);
-        
+
         FramebufferDrawString(LineBuf, 0, DrawY, GBasecon.Fg, GBasecon.Bg);
     }
-    
-    // ─── Рисуем курсор ───
+
     if (GBasecon.InputMode) {
         UINT32 PromptLen = StrLen(GBasecon.Prompt);
         UINT32 CursorGlobal = PromptLen + GBasecon.Input.CursorPos;
         UINT32 CursorLine = CursorGlobal / LineWidth;
         UINT32 CursorCol = CursorGlobal % LineWidth;
-        
+
         UINT32 CursorX = CursorCol * FONT_WIDTH;
-        UINT32 CursorY = PromptBaseY + CursorLine * FONT_LINE_HEIGHT 
+        UINT32 CursorY = PromptBaseY + CursorLine * FONT_LINE_HEIGHT
                          + FONT_LINE_HEIGHT - 2;
-        
-        if (CursorX < GBasecon.FB->Width && 
+
+        if (CursorX < GBasecon.FB->Width &&
             CursorY + 2 <= GBasecon.FB->Height) {
             FramebufferFillRect(CursorX, CursorY, FONT_WIDTH, 2, GBasecon.Fg);
         }
     }
-    
+
     FramebufferSwapBuffers();
 }
 
-// ============================================================================
-// PROGRAM COMPLETION CHECK
-// ============================================================================
-
-VOID BaseconCheckProgramStatus(VOID) {
-    if (!GBasecon.WaitingForProgram) return;
-    
-    if (!TaskIsAlive(GBasecon.WaitingPid)) {
-        GBasecon.WaitingForProgram = FALSE;
-        GBasecon.WaitingPid = -1;
-        BaseconInputStart();
-    }
-}
-
-// ============================================================================
-// PROMPT FIXED MODE
-// ============================================================================
-
-VOID BaseconSetPromptFixed(BOOL Enable) {
-    if (!GBasecon.Initialized) return;
-    GBasecon.PromptFixed = Enable;
-    
-    if (Enable) {
-        GBasecon.Scrollback.Count = 0;
-        GBasecon.Scrollback.StartLine = 0;
-        GBasecon.Scrollback.MaxDisplayLines = GBasecon.Height - 1;
-        GBasecon.WaitingForProgram = FALSE;
-        GBasecon.WaitingPid = -1;
-        
-        BaseconClear();
-        BaseconRedrawFull();
-    }
-}
-
-// ============================================================================
-// BASIC OUTPUT
-// ============================================================================
-
-STATIC VOID BaseconPutChar(CHAR C) {
+STATIC VOID BaseconPutCharLocked(CHAR C) {
     if (!GBasecon.Initialized) return;
     if (!BaseconEnabled) return;
-    
+
     if (GBasecon.PromptFixed) {
-        STATIC CHAR LineBuffer[1024];
-        STATIC UINT32 LineLen = 0;
-        
+        CHAR *LineBuffer = GBasecon.OutLineBuffer;
+        UINT32 *LineLen = &GBasecon.OutLineLen;
+
         if (C == '\n') {
-            if (LineLen > 0) {
-                LineBuffer[LineLen] = '\0';
-                BaseconAddToScrollback(LineBuffer);
-                LineLen = 0;
+            if (*LineLen > 0) {
+                LineBuffer[*LineLen] = '\0';
+                BaseconAddToScrollbackLocked(LineBuffer);
+                *LineLen = 0;
                 LineBuffer[0] = '\0';
             }
             return;
         }
-        
+
         if (C == '\r') {
-            LineLen = 0;
+            *LineLen = 0;
             LineBuffer[0] = '\0';
-            BaseconRedrawFull();
+            BaseconRedrawFullLocked();
             return;
         }
-        
+
         if (C == '\b') {
-            if (LineLen > 0) LineLen--;
+            if (*LineLen > 0) (*LineLen)--;
             return;
         }
-        
+
         if ((C >= 0x20 && C <= 0x7E) || (C >= 0x80 && C <= 0xBF)) {
-            if (LineLen >= GBasecon.Width) {
-            	// Строка заполнена — отправляем её в scrollback
-            	LineBuffer[LineLen] = '\0';
-            	BaseconAddToScrollback(LineBuffer);
-            	LineLen = 0;
-    	    }
-    
-    	    if (LineLen < sizeof(LineBuffer) - 1) {
-            	LineBuffer[LineLen++] = C;
+            if (*LineLen >= GBasecon.Width) {
+                LineBuffer[*LineLen] = '\0';
+                BaseconAddToScrollbackLocked(LineBuffer);
+                *LineLen = 0;
             }
-	}
+
+            if (*LineLen < BASECON_OUTLINE_BUFFER_SIZE - 1) {
+                LineBuffer[(*LineLen)++] = C;
+            }
+        }
         return;
     }
-    
-    // Old mode - draw directly
+
+    // Old mode
     if (C == '\n') {
         GBasecon.CursorX = 0;
         GBasecon.CursorY++;
         if (GBasecon.CursorY >= GBasecon.Height) {
-            // Прокрутка вверх на одну строку
             Framebuffer *FB = GBasecon.FB;
             UINT32 LineBytes = FONT_LINE_HEIGHT * FB->Pitch;
             UINT32 TotalBytes = FB->Height * FB->Pitch;
@@ -246,7 +206,6 @@ STATIC VOID BaseconPutChar(CHAR C) {
                 MemMove(Buf, Buf + LineBytes, TotalBytes - LineBytes);
                 MemSet(Buf + TotalBytes - LineBytes, 0, LineBytes);
             }
-
             GBasecon.CursorY = GBasecon.Height - 1;
         }
     } else if (C >= 0x20 || C >= 0x80) {
@@ -267,85 +226,160 @@ STATIC VOID BaseconPutChar(CHAR C) {
                     MemMove(Buf, Buf + LineBytes, TotalBytes - LineBytes);
                     MemSet(Buf + TotalBytes - LineBytes, 0, LineBytes);
                 }
-
                 GBasecon.CursorY = GBasecon.Height - 1;
             }
         }
     }
 }
 
-VOID BaseconPutString(const CHAR *Str) {
+STATIC VOID BaseconPutStringLocked(const CHAR *Str) {
     if (!GBasecon.Initialized || !Str) return;
     if (!BaseconEnabled) return;
-    
+
     while (*Str) {
-        BaseconPutChar(*Str);
+        BaseconPutCharLocked(*Str);
         Str++;
     }
 
     FramebufferSwapBuffers();
 }
 
+// ============================================================================
+// KEY QUEUE (separate lock)
+// ============================================================================
+
+VOID BaseconQueueKey(UINT8 ScanCode, CHAR Ascii, BOOL Pressed) {
+    UINTPTR Flags = SpinLockAcquireIrq(&GKeyQueue.Lock);
+
+    UINT32 Next = (GKeyQueue.Head + 1) % BASECON_KEY_QUEUE_SIZE;
+    if (Next == GKeyQueue.Tail) {
+        SpinLockReleaseIrq(&GKeyQueue.Lock, Flags);
+        return;
+    }
+
+    GKeyQueue.Events[GKeyQueue.Head].ScanCode = ScanCode;
+    GKeyQueue.Events[GKeyQueue.Head].Ascii = Ascii;
+    GKeyQueue.Events[GKeyQueue.Head].Pressed = Pressed;
+    GKeyQueue.Head = Next;
+
+    BOOL NeedWake = GKeyQueue.Blocked;
+    GKeyQueue.Blocked = FALSE;
+
+    SpinLockReleaseIrq(&GKeyQueue.Lock, Flags);
+
+    if (NeedWake && GConsoleTask) {
+        TaskWakeup(GConsoleTask);
+    }
+}
+
+// ============================================================================
+// PUBLIC (they take GBasecon.Lock)
+// ============================================================================
+
+VOID BaseconAddToScrollback(const CHAR *Str) {
+    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+    BaseconAddToScrollbackLocked(Str);
+    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+}
+
+VOID BaseconRedrawFull(VOID) {
+    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+    BaseconRedrawFullLocked();
+    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+}
+
+VOID BaseconCheckProgramStatus(VOID) {
+    // We read without lock — flags are written under lock, but reading is reasonable
+    // not critical for accuracy
+    if (!GBasecon.WaitingForProgram) return;
+    if (!TaskIsAlive(GBasecon.WaitingPid)) {
+        GBasecon.WaitingForProgram = FALSE;
+        GBasecon.WaitingPid = -1;
+        BaseconInputStart();
+    }
+}
+
+VOID BaseconSetPromptFixed(BOOL Enable) {
+    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+    if (!GBasecon.Initialized) {
+        SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+        return;
+    }
+
+    GBasecon.PromptFixed = Enable;
+
+    if (Enable) {
+        GBasecon.Scrollback.Count = 0;
+        GBasecon.Scrollback.StartLine = 0;
+        GBasecon.Scrollback.MaxDisplayLines = GBasecon.Height - 1;
+        GBasecon.WaitingForProgram = FALSE;
+        GBasecon.WaitingPid = -1;
+
+        // inline clear + redraw (without taking the lock again)
+        GBasecon.Scrollback.Count = 0;
+        GBasecon.Scrollback.StartLine = 0;
+        BaseconRedrawFullLocked();
+    }
+    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+}
+
+VOID BaseconPutString(const CHAR *Str) {
+    if (!GBasecon.Initialized || !Str) return;
+    if (!BaseconEnabled) return;
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+    BaseconPutStringLocked(Str);
+    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+}
+
 INT BaseconPrintf(BaseconMsgType Type, const CHAR *Fmt, ...) {
     if (!GBasecon.Initialized || !Fmt) RETURN(INCORRECT_VALUE);
     if (!BaseconEnabled) RETURN(OPERATION_DISABLED);
-    
-    FramebufferColor OldFg = GBasecon.Fg;
-    FramebufferColor OldBg = GBasecon.Bg;
-    
-    const CHAR *Prefix = NULLPTR;
-    FramebufferColor PrefixColor = OldFg;
-    BOOL HasPrefix = FALSE;
-    
-    switch (Type) {
-        case BASECON_TYPE_ERROR:
-            Prefix = "E: ";
-            PrefixColor = RGB_RED;
-            HasPrefix = TRUE;
-            break;
-        case BASECON_TYPE_INFO:
-            Prefix = "I: ";
-            PrefixColor = RGB_BLUE;
-            HasPrefix = TRUE;
-            break;
-        case BASECON_TYPE_SUCCESS:
-            Prefix = "S: ";
-            PrefixColor = RGB_GREEN;
-            HasPrefix = TRUE;
-            break;
-        case BASECON_TYPE_WARNING:
-            Prefix = "W: ";
-            PrefixColor = RGB_YELLOW;
-            HasPrefix = TRUE;
-            break;
-        default:
-            break;
-    }
-    
-    if (HasPrefix) {
-        BaseconSetColors(PrefixColor, OldBg);
-        BaseconPutString(Prefix);
-        BaseconSetColors(OldFg, OldBg);
-    }
-    
+
     CHAR Buffer[1024];
     VA_LIST Args;
-    
     VaStart(Args, Fmt);
     INT Result = VsnPrintf(Buffer, sizeof(Buffer), Fmt, Args);
     VaEnd(Args);
-    
-    if (Result > 0) {
-        BaseconPutString(Buffer);
+
+    if (Result <= 0) RETURN(Result);
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+
+    FramebufferColor OldFg = GBasecon.Fg;
+    FramebufferColor OldBg = GBasecon.Bg;
+
+    const CHAR *Prefix = NULLPTR;
+    FramebufferColor PrefixColor = OldFg;
+    BOOL HasPrefix = FALSE;
+
+    switch (Type) {
+        case BASECON_TYPE_ERROR:   Prefix = "E: "; PrefixColor = RGB_RED;    HasPrefix = TRUE; break;
+        case BASECON_TYPE_INFO:    Prefix = "I: "; PrefixColor = RGB_BLUE;   HasPrefix = TRUE; break;
+        case BASECON_TYPE_SUCCESS: Prefix = "S: "; PrefixColor = RGB_GREEN;  HasPrefix = TRUE; break;
+        case BASECON_TYPE_WARNING: Prefix = "W: "; PrefixColor = RGB_YELLOW; HasPrefix = TRUE; break;
+        default: break;
     }
-    
+
+    if (HasPrefix) {
+        GBasecon.Fg = PrefixColor;
+        BaseconPutStringLocked(Prefix);
+        GBasecon.Fg = OldFg;
+    }
+
+    BaseconPutStringLocked(Buffer);
+
+    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+
     RETURN(Result);
 }
 
 VOID BaseconSetColors(FramebufferColor Fg, FramebufferColor Bg) {
     if (!GBasecon.Initialized) return;
+    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
     GBasecon.Fg = Fg;
     GBasecon.Bg = Bg;
+    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
 }
 
 Basecon *BaseconGet(VOID) {
@@ -361,65 +395,73 @@ VOID BaseconSetEnabled(BOOL Enabled) {
 VOID BaseconClear(VOID) {
     if (!GBasecon.Initialized) return;
     if (!BaseconEnabled) return;
-    
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+
     if (GBasecon.PromptFixed) {
         GBasecon.Scrollback.Count = 0;
         GBasecon.Scrollback.StartLine = 0;
-        BaseconRedrawFull();
+        BaseconRedrawFullLocked();
     } else {
         GBasecon.CursorX = 0;
         GBasecon.CursorY = 0;
         FramebufferClear(GBasecon.Bg);
     }
-}
 
-// ============================================================================
-// INPUT
-// ============================================================================
+    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+}
 
 VOID BaseconSetPrompt(const CHAR *Prompt) {
     if (!GBasecon.Initialized) return;
+    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
     if (Prompt) {
         StrnCpy(GBasecon.Prompt, Prompt, sizeof(GBasecon.Prompt) - 1);
         GBasecon.Prompt[sizeof(GBasecon.Prompt) - 1] = '\0';
     } else {
         GBasecon.Prompt[0] = '\0';
     }
+    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
 }
 
 VOID BaseconInputStart(VOID) {
     if (!GBasecon.Initialized) return;
     if (!BaseconEnabled) return;
-    
+
     if (GBasecon.WaitingForProgram) return;
-    
+
     if (!GBaseconSubscribed) {
         if (Ps2KeyboardSubscribe(KeyboardHandler, NULLPTR) == SUCCESS) {
             GBaseconSubscribed = TRUE;
         }
     }
-    
-    // Сбрасываем цвет на дефолтный
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+
+    GBasecon.Fg = RGB_GRAY;
+    GBasecon.Bg = RGB_BLACK;
+
     GBasecon.InputMode = TRUE;
     GBasecon.Input.Length = 0;
     GBasecon.Input.CursorPos = 0;
     GBasecon.Input.ViewStart = 0;
     GBasecon.Input.Buffer[0] = '\0';
-    
+
     if (GBasecon.PromptFixed) {
-        BaseconRedrawFull();
+        BaseconRedrawFullLocked();
     } else {
         if (GBasecon.Prompt[0]) {
-            BaseconPutString(GBasecon.Prompt);
+            BaseconPutStringLocked(GBasecon.Prompt);
         }
     }
+
+    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
 }
 
 VOID BaseconInputEnd(VOID) {
     if (!GBasecon.Initialized) return;
+    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
     GBasecon.InputMode = FALSE;
+    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
 }
 
 const CHAR* BaseconGetInput(VOID) {
@@ -436,78 +478,89 @@ VOID BaseconSetInputCallback(BaseconInputCallback Callback, VOID *UserData) {
     GInputCallbackUserData = UserData;
 }
 
-// ============================================================================
-// KEYBOARD HANDLER
-// ============================================================================
-
 STATIC VOID KeyboardHandler(KeyEvent *Event, VOID *UserData) {
+    (VOID)UserData;
     if (!Event) return;
-    BaseconProcessKey(Event->RawScanCode, Event->Ascii, 
-                      Event->State == KEY_STATE_PRESSED);
+    BaseconQueueKey(Event->RawScanCode, Event->Ascii,
+                    Event->State == KEY_STATE_PRESSED);
 }
+
+// ============================================================================
+// KEY PROCESSING — takes GBasecon.Lock once
+// ============================================================================
 
 VOID BaseconProcessKey(UINT8 ScanCode, CHAR Ascii, BOOL Pressed) {
     if (!GBasecon.Initialized || !BaseconEnabled) return;
     if (!Pressed) return;
 
+    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+
     UINT8 CharCode = (UINT8)Ascii;
 
     if (!GBasecon.InputMode) {
-        if ((CharCode >= 0x20 && CharCode <= 0x7E) || 
+        if ((CharCode >= 0x20 && CharCode <= 0x7E) ||
             (CharCode >= 0x80 && CharCode <= 0xBF)) {
-            BaseconPutChar(Ascii);
+            BaseconPutCharLocked(Ascii);
         }
+        SpinLockReleaseIrq(&GBasecon.Lock, Flags);
         return;
     }
-    
+
     CHAR *Buffer = GBasecon.Input.Buffer;
     UINT32 *Len = &GBasecon.Input.Length;
     UINT32 *CursorPos = &GBasecon.Input.CursorPos;
-    
-    // ─── Максимальное количество символов с учётом переноса ───
-    // Промпт + ввод не должны вылезти за разумные пределы
     UINT32 MaxInputChars = BASECON_INPUT_BUFFER_SIZE - 1;
-    
+
     switch (ScanCode) {
         case 0x1C: { // Enter
             if (GBasecon.PromptFixed && *Len > 0) {
                 CHAR FullLine[BASECON_INPUT_BUFFER_SIZE + 128];
                 StrCpy(FullLine, GBasecon.Prompt);
                 StrCat(FullLine, Buffer);
-                BaseconAddToScrollback(FullLine);
+                BaseconAddToScrollbackLocked(FullLine);
             }
-            
+
             if (*Len > 0) {
                 if (GBasecon.History.Count < BASECON_HISTORY_SIZE) {
                     StrCpy(GBasecon.History.Lines[GBasecon.History.Count], Buffer);
                     GBasecon.History.Count++;
                 } else {
                     for (UINT32 I = 0; I < BASECON_HISTORY_SIZE - 1; I++) {
-                        StrCpy(GBasecon.History.Lines[I], 
+                        StrCpy(GBasecon.History.Lines[I],
                                GBasecon.History.Lines[I + 1]);
                     }
-                    StrCpy(GBasecon.History.Lines[BASECON_HISTORY_SIZE - 1], 
+                    StrCpy(GBasecon.History.Lines[BASECON_HISTORY_SIZE - 1],
                            Buffer);
                 }
                 GBasecon.History.Current = GBasecon.History.Count;
             }
-            
-            if (GInputCallback) {
-                GInputCallback(Buffer, GInputCallbackUserData);
-            }
-            
+
+            // Calling a callback OUTSIDE the lock so that there is no deadline
+            BaseconInputCallback Cb = GInputCallback;
+            VOID *CbData = GInputCallbackUserData;
+            CHAR CbBuffer[BASECON_INPUT_BUFFER_SIZE];
+            StrnCpy(CbBuffer, Buffer, sizeof(CbBuffer) - 1);
+            CbBuffer[sizeof(CbBuffer) - 1] = '\0';
+
             *Len = 0;
             *CursorPos = 0;
             GBasecon.Input.ViewStart = 0;
             Buffer[0] = '\0';
             GBasecon.InputMode = FALSE;
-            
-            if (!GBasecon.WaitingForProgram) {
+
+            BOOL NeedRestart = !GBasecon.WaitingForProgram;
+
+            SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+
+            if (Cb) {
+                Cb(CbBuffer, CbData);
+            }
+            if (NeedRestart) {
                 BaseconInputStart();
             }
             return;
         }
-        
+
         case 0x0E: { // Backspace
             if (*CursorPos > 0) {
                 for (UINT32 I = *CursorPos - 1; I < *Len - 1; I++) {
@@ -515,111 +568,90 @@ VOID BaseconProcessKey(UINT8 ScanCode, CHAR Ascii, BOOL Pressed) {
                 }
                 (*Len)--;
                 (*CursorPos)--;
-                
                 if (*CursorPos < GBasecon.Input.ViewStart) {
                     GBasecon.Input.ViewStart = *CursorPos;
                 }
-                
                 Buffer[*Len] = '\0';
-                if (GBasecon.PromptFixed) {
-                    BaseconRedrawFull();
-                }
+                if (GBasecon.PromptFixed) BaseconRedrawFullLocked();
             }
             break;
         }
-        
-        case 0x53: { // Delete (extended)
+
+        case 0x53: { // Delete
             if (*CursorPos < *Len) {
                 for (UINT32 I = *CursorPos; I < *Len - 1; I++) {
                     Buffer[I] = Buffer[I + 1];
                 }
                 (*Len)--;
                 Buffer[*Len] = '\0';
-                if (GBasecon.PromptFixed) {
-                    BaseconRedrawFull();
-                }
+                if (GBasecon.PromptFixed) BaseconRedrawFullLocked();
             }
             break;
         }
-        
-        case 0x4B: { // Left Arrow
+
+        case 0x4B: { // Left
             if (*CursorPos > 0) {
                 (*CursorPos)--;
                 if (*CursorPos < GBasecon.Input.ViewStart) {
                     GBasecon.Input.ViewStart = *CursorPos;
                 }
-                if (GBasecon.PromptFixed) {
-                    BaseconRedrawFull();
-                }
+                if (GBasecon.PromptFixed) BaseconRedrawFullLocked();
             }
             break;
         }
-        
-        case 0x4D: { // Right Arrow
+
+        case 0x4D: { // Right
             if (*CursorPos < *Len) {
                 (*CursorPos)++;
-                if (GBasecon.PromptFixed) {
-                    BaseconRedrawFull();
-                }
+                if (GBasecon.PromptFixed) BaseconRedrawFullLocked();
             }
             break;
         }
-        
+
         case 0x47: { // Home
             *CursorPos = 0;
             GBasecon.Input.ViewStart = 0;
-            if (GBasecon.PromptFixed) {
-                BaseconRedrawFull();
-            }
+            if (GBasecon.PromptFixed) BaseconRedrawFullLocked();
             break;
         }
-        
+
         case 0x4F: { // End
             *CursorPos = *Len;
-            if (GBasecon.PromptFixed) {
-                BaseconRedrawFull();
-            }
+            if (GBasecon.PromptFixed) BaseconRedrawFullLocked();
             break;
         }
-        
-        case 0x48: { // Up Arrow (history)
+
+        case 0x48: { // Up
             if (GBasecon.History.Current > 0) {
                 GBasecon.History.Current--;
                 StrCpy(Buffer, GBasecon.History.Lines[GBasecon.History.Current]);
                 *Len = StrLen(Buffer);
                 *CursorPos = *Len;
-                if (GBasecon.PromptFixed) {
-                    BaseconRedrawFull();
-                }
+                if (GBasecon.PromptFixed) BaseconRedrawFullLocked();
             }
             break;
         }
-        
-        case 0x50: { // Down Arrow (history)
+
+        case 0x50: { // Down
             if (GBasecon.History.Current < GBasecon.History.Count) {
                 GBasecon.History.Current++;
                 if (GBasecon.History.Current < GBasecon.History.Count) {
-                    StrCpy(Buffer, 
+                    StrCpy(Buffer,
                            GBasecon.History.Lines[GBasecon.History.Current]);
                 } else {
                     Buffer[0] = '\0';
                 }
                 *Len = StrLen(Buffer);
                 *CursorPos = *Len;
-                if (GBasecon.PromptFixed) {
-                    BaseconRedrawFull();
-                }
+                if (GBasecon.PromptFixed) BaseconRedrawFullLocked();
             }
             break;
         }
-        
+
         default: {
-            if ((CharCode >= 0x20 && CharCode <= 0x7E) || 
+            if ((CharCode >= 0x20 && CharCode <= 0x7E) ||
                 (CharCode >= 0x80 && CharCode <= 0xBF)) {
-                
-                // Ограничение по длине буфера
                 if (*Len >= MaxInputChars) break;
-                
                 for (UINT32 I = *Len; I > *CursorPos; I--) {
                     Buffer[I] = Buffer[I - 1];
                 }
@@ -627,25 +659,24 @@ VOID BaseconProcessKey(UINT8 ScanCode, CHAR Ascii, BOOL Pressed) {
                 (*Len)++;
                 (*CursorPos)++;
                 Buffer[*Len] = '\0';
-                
-                if (GBasecon.PromptFixed) {
-                    BaseconRedrawFull();
-                }
+                if (GBasecon.PromptFixed) BaseconRedrawFullLocked();
             }
             break;
         }
     }
+
+    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
 }
 
 // ============================================================================
-// INITIALIZATION
+// INIT
 // ============================================================================
 
 INT BaseconInit(Framebuffer *FB) {
     if (!FB || !FB->Initialized) RETURN(INCORRECT_VALUE);
-    
+
     MemSet(&GBasecon, 0, sizeof(Basecon));
-    
+
     GBasecon.FB = FB;
     GBasecon.Width = FB->Width / FONT_WIDTH;
     GBasecon.Height = FB->Height / FONT_LINE_HEIGHT;
@@ -664,15 +695,137 @@ INT BaseconInit(Framebuffer *FB) {
     GBasecon.CursorX = 0;
     GBasecon.CursorY = 0;
     GBasecon.ScrollY = 0;
-    
+
+    GRunning = TRUE;
+
     GBasecon.PromptFixed = FALSE;
     GBasecon.Scrollback.Count = 0;
     GBasecon.Scrollback.StartLine = 0;
     GBasecon.Scrollback.MaxDisplayLines = GBasecon.Height - 1;
     GBasecon.WaitingForProgram = FALSE;
     GBasecon.WaitingPid = -1;
-    
+
+    GBasecon.OutLineLen = 0;
+    GBasecon.OutLineBuffer[0] = '\0';
+
+    SpinLockInit(&GBasecon.Lock);
+
     BaseconClear();
-    
+
     RETURN(SUCCESS);
+}
+
+STATIC VOID ConsoleThread(VOID) {
+    GConsoleTask = GetCurrentTask();
+
+    while (GRunning) {
+        while (GRunning) {
+            BaseconKeyEvent Ev;
+            BOOL Have = FALSE;
+
+            UINTPTR Flags = SpinLockAcquireIrq(&GKeyQueue.Lock);
+            if (GKeyQueue.Head != GKeyQueue.Tail) {
+                Ev = GKeyQueue.Events[GKeyQueue.Tail];
+                GKeyQueue.Tail = (GKeyQueue.Tail + 1) % BASECON_KEY_QUEUE_SIZE;
+                Have = TRUE;
+            }
+            SpinLockReleaseIrq(&GKeyQueue.Lock, Flags);
+
+            if (!Have) break;
+            BaseconProcessKey(Ev.ScanCode, Ev.Ascii, Ev.Pressed);
+        }
+
+        if (!GRunning) break;
+
+        UINTPTR Flags = SpinLockAcquireIrq(&GKeyQueue.Lock);
+        BOOL NeedBlock = (GKeyQueue.Head == GKeyQueue.Tail);
+        if (NeedBlock) GKeyQueue.Blocked = TRUE;
+        SpinLockReleaseIrq(&GKeyQueue.Lock, Flags);
+
+        if (NeedBlock) {
+            TaskBlock();
+        }
+    }
+
+    /* kconsole is being completed normally. */
+    GConsoleTask = NULLPTR;
+    TaskExit(0);
+}
+
+VOID BaseconStartConsoleThread(VOID) {
+    if (GConsoleTask) return;
+    if (!GRunning) return;
+
+    SpinLockInit(&GKeyQueue.Lock);
+    GKeyQueue.Head = 0;
+    GKeyQueue.Tail = 0;
+    GKeyQueue.Blocked = FALSE;
+
+    INT Pid = TaskCreate(ConsoleThread, 1024 * 1024, "kconsole");
+    if (Pid < 0) {
+        BaseconPrintf(BASECON_TYPE_WARNING,
+                      "basecon: failed to start kconsole thread\n");
+    }
+}
+
+VOID BaseconShutdown(BOOL ClearScreen) {
+    /* Idempotence: if it is already turned off, we exit. */
+    if (!GRunning && !BaseconEnabled) return;
+
+    /* 1. Stop kconsole. */
+    GRunning = FALSE;
+
+    if (GConsoleTask) {
+        TaskWakeup(GConsoleTask);   /* wake up if in TaskBlock */
+    }
+
+    /* 2. Clear the screen (before disabling BaseconEnabled). */
+    if (ClearScreen && GBasecon.Initialized) {
+        UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+        FramebufferClear(GBasecon.Bg);
+        FramebufferSwapBuffers();
+        SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+    }
+
+    /* 3. Unsubscribe from the keyboard. */
+    if (GBaseconSubscribed) {
+        Ps2KeyboardUnsubscribe(KeyboardHandler);
+        GBaseconSubscribed = FALSE;
+    }
+
+    /* 4. Reset the callback. */
+    GInputCallback = NULLPTR;
+    GInputCallbackUserData = NULLPTR;
+
+    /* 5. Clear the queue of keys. */
+    {
+        UINTPTR Flags = SpinLockAcquireIrq(&GKeyQueue.Lock);
+        GKeyQueue.Head = 0;
+        GKeyQueue.Tail = 0;
+        GKeyQueue.Blocked = FALSE;
+        SpinLockReleaseIrq(&GKeyQueue.Lock, Flags);
+    }
+
+    /* 6. Disable BaseconEnabled — all Basecon* functions will return immediately. */
+    BaseconEnabled = FALSE;
+
+    /* 7. Reset the GBasecon flags. */
+    if (GBasecon.Initialized) {
+        UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+        GBasecon.InputMode = FALSE;
+        GBasecon.PromptFixed = FALSE;
+        GBasecon.WaitingForProgram = FALSE;
+        GBasecon.WaitingPid = -1;
+        GBasecon.Input.Length = 0;
+        GBasecon.Input.CursorPos = 0;
+        GBasecon.Input.ViewStart = 0;
+        GBasecon.Input.Buffer[0] = '\0';
+        GBasecon.OutLineLen = 0;
+        GBasecon.OutLineBuffer[0] = '\0';
+        SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+    }
+}
+
+BOOL BaseconIsShutdown(VOID) {
+    return !GRunning;
 }

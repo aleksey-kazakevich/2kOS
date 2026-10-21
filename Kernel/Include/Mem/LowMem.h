@@ -3,25 +3,25 @@
 #include <Types.h>
 
 #define LOWMEM_MAX_ADDR     0x1000000ULL    // 16 MB
-#define LOWMEM_SIZE         (256 * 1024)    // 256 KB зарезервируем
+#define LOWMEM_SIZE         (256 * 1024)    // 256 KB reserved
 #define LOWMEM_ALIGN        0x10000ULL      // 64 KB
 
-// Инициализация. Вызывать ОДИН РАЗ, ДО PhysAllocInit.
-// Найдёт contiguous region ниже 16 MB, выровненный на 64 KB,
-// и запомнит его. PMM об этих страницах не узнает.
+// Initialization. Call IT ONCE, BEFORE PhysAllocInit.
+// Will find a contiguous region below 16 MB, aligned to 64 KB,
+//and she'll remember it. The PMM will not know about these pages.
 VOID LowMemInit(VOID);
 
-// Аллоцировать N страниц ниже 16 MB (выравнивание 64 KB).
-// Возвращает HHDM-виртуальный адрес или NULLPTR.
+// Allocate N pages below 16 MB (64 KB alignment).
+// Returns the HHDM virtual address or NULLPTR.
 VOID* LowMemAllocate(UINT32 PageCount);
 
-// Освободить (no-op для bump-аллокатора, но API есть).
+// Release (no-op for bump allocator, but there is an API).
 VOID LowMemFree(VOID *Addr, UINT32 PageCount);
 
-// Физический адрес по HHDM-указателю.
+// The physical address of the HHDM pointer.
 UINT64 LowMemPhys(VOID *VirtAddr);
 
-// Сколько свободно.
+// How much is available.
 UINT32 LowMemFreePages(VOID);
 
 UINT64 LowMemPhysBase(VOID);

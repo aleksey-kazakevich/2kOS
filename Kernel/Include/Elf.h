@@ -70,32 +70,34 @@ typedef struct {
 // API
 // ============================================================================
 
-// Загрузить ELF из памяти. Возвращает SUCCESS или код ошибки.
-// - OutPageTable: новое адресное пространство (PML4)
-// - OutEntry:     точка входа
-// - OutStackTop:  верхушка user-стека (RSP)
+// Load ELF from memory. Returns SUCCESS or error code
+// - OutPageTable: new address space (PML4)
+// - OutEntry:    entry point
+// - OutStackTop:  top of the user stack (RSP)
 INT ElfLoad(const VOID *Image, USIZE ImageSize,
             UINT64 **OutPageTable,
             UINT64 *OutEntry,
             UINT64 *OutStackTop,
+	    UINT64 *OutHeapStart,
             INT ArgC, const CHAR *ArgV[]);
 
-// Загрузить ELF из VFS-файла
+// Download ELF from a VFS file
 INT ElfLoadFromFile(VfsFile *File,
                     UINT64 **OutPageTable,
                     UINT64 *OutEntry,
                     UINT64 *OutStackTop,
+		    UINT64 *OutHeapStart,
                     INT ArgC, const CHAR *ArgV[]);
 
-// Создать user-задачу из ELF-образа
+// Create a user task from an ELF image
 INT UserTaskCreateFromElf(const VOID *Image, USIZE ImageSize,
                           const CHAR *Name,
                           INT ArgC, const CHAR *ArgV[]);
 
-// Создать user-задачу из ELF-файла
+// Create a user task from an ELF file
 INT UserTaskCreateFromElfFile(const CHAR *Path,
                               const CHAR *Name,
                               INT ArgC, const CHAR *ArgV[]);
 
-// Проверка — является ли буфер валидным ELF64
+// Checking whether the buffer is valid ELF64
 BOOL ElfIsValid(const VOID *Image, USIZE ImageSize);

@@ -1,9 +1,7 @@
 #pragma once
 
+#include <PerCpu.h>
 #include <Types.h>
 
-extern UINT64 SyscallStackTop;
-extern UINT64 SyscallUserRsp;
-
-VOID TssInit(VOID);
-VOID TssSetRsp0(UINT64 Rsp0);
+VOID TssInitPerCpu(PerCpu *P);
+VOID TssSetRsp0(PerCpu *P, UINT64 Rsp0);

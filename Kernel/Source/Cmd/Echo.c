@@ -4,13 +4,13 @@
 #include <Return.h>
 
 INT CmdEchoHandler(INT ArgC, const CHAR *ArgV[]) {
-    // Если нет аргументов, просто выводим пустую строку
+    // If there are no arguments, just output an empty string.
     if (ArgC < 2) {
         BaseconPutString("\n");
         return 0;
     }
     
-    // Выводим все аргументы через пробел
+    // Output all arguments separated by a space
     for (INT I = 1; I < ArgC; I++) {
         BaseconPutString(ArgV[I]);
         if (I < ArgC - 1) {

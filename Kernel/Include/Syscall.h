@@ -8,6 +8,7 @@
 // ============================================================================
 
 #define SYS_WRITE          1
+#define SYS_BRK            12
 #define SYS_EXIT           60
 #define SYS_GETPID         39
 #define SYS_GETTICKS       1001

@@ -1,4 +1,5 @@
 #include <Lib/String.h>
+#include <SpinLock.h>
 #include <KDriver.h>
 #include <Return.h>
 
@@ -8,60 +9,104 @@ STATIC UINT32 GKDriverCount = 0;
 STATIC UINT8 GKDriverPrivatePool[8192];
 STATIC UINT32 GKDriverPrivateOffset = 0;
 
+STATIC SpinLock GKDriverLock;
+
 VOID KDriverInit(VOID) {
+    SpinLockInit(&GKDriverLock);
     ListInit(&GKDriverList);
     GKDriverCount = 0;
 }
 
 INT KDriverRegister(KDriver *Driver) {
     if (Driver == NULLPTR) RETURN(NO_OBJECT);
-    if (KDriverFindByName(Driver->Name)) {
-	RETURN(ALREADY_EXISTS);
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GKDriverLock);
+
+    // Checking the duplicate under the lock
+    ListHead *Pos;
+    ListForEach(Pos, &GKDriverList) {
+        KDriver *D = ListEntry(Pos, KDriver, Node);
+        if (StrCmp(D->Name, Driver->Name) == 0) {
+            SpinLockReleaseIrq(&GKDriverLock, Flags);
+            RETURN(ALREADY_EXISTS);
+        }
     }
+
     ListAddTail(&GKDriverList, &Driver->Node);
     GKDriverCount++;
     Driver->Initialized = FALSE;
+
+    SpinLockReleaseIrq(&GKDriverLock, Flags);
     RETURN(SUCCESS);
 }
 
 INT KDriverUnregister(KDriver *Driver) {
     if (Driver == NULLPTR) RETURN(NO_OBJECT);
-    if (Driver->Shutdown != NULLPTR) {
-        Driver->Shutdown(Driver);
+
+    KDriverCallback ShutdownFn = NULLPTR;
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GKDriverLock);
+    ShutdownFn = Driver->Shutdown;
+    SpinLockReleaseIrq(&GKDriverLock, Flags);
+
+    // Shutdown outside the lock can be long
+    if (ShutdownFn) {
+        ShutdownFn(Driver);
     }
+
+    Flags = SpinLockAcquireIrq(&GKDriverLock);
     ListDel(&Driver->Node);
-    GKDriverCount--;
+    if (GKDriverCount > 0) GKDriverCount--;
+    SpinLockReleaseIrq(&GKDriverLock, Flags);
+
     RETURN(SUCCESS);
 }
-KDriver* KDriverGenerateStruct(const CHAR *Name, UINT8 DCL, BOOL Initialized, VOID *Priv, KDriverCallback ShutdownCallback) {
+
+KDriver* KDriverGenerateStruct(const CHAR *Name, UINT8 DCL, BOOL Initialized,
+                                VOID *Priv, KDriverCallback ShutdownCallback) {
+    if (!Name) return NULLPTR;
+
     UINT8 StaticDCL = DCL;
     if (DCL > 2) StaticDCL = 1;
-    
-    // Allocating memory from the pool or using MemoryAllocate
-    KDriver *StaticDriver = (KDriver*)&GKDriverPrivatePool[GKDriverPrivateOffset];
-    if (GKDriverPrivateOffset + sizeof(KDriver) > 8192) {
-        return NULLPTR;  // Pool is full
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GKDriverLock);
+
+    if (GKDriverPrivateOffset + sizeof(KDriver) > sizeof(GKDriverPrivatePool)) {
+        SpinLockReleaseIrq(&GKDriverLock, Flags);
+        return NULLPTR;   // Pool is full
     }
+
+    KDriver *StaticDriver = (KDriver*)&GKDriverPrivatePool[GKDriverPrivateOffset];
     GKDriverPrivateOffset += sizeof(KDriver);
-    
-    StrCpy(StaticDriver->Name, Name);
+
+    StrnCpy(StaticDriver->Name, Name, sizeof(StaticDriver->Name) - 1);
+    StaticDriver->Name[sizeof(StaticDriver->Name) - 1] = '\0';
     StaticDriver->DCL = StaticDCL;
     StaticDriver->Initialized = Initialized;
     StaticDriver->Priv = Priv;
     StaticDriver->Shutdown = ShutdownCallback;
-    
+
+    SpinLockReleaseIrq(&GKDriverLock, Flags);
     return StaticDriver;
 }
 
 KDriver* KDriverFindByName(const CHAR *Name) {
+    if (!Name) return NULLPTR;
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GKDriverLock);
+
+    KDriver *Result = NULLPTR;
     ListHead *Pos;
     ListForEach(Pos, &GKDriverList) {
         KDriver *Driver = ListEntry(Pos, KDriver, Node);
-	if (StrCmp(Driver->Name, Name) == 0) {
-	    return Driver;
-	}
+        if (StrCmp(Driver->Name, Name) == 0) {
+            Result = Driver;
+            break;
+        }
     }
-    return NULLPTR;
+
+    SpinLockReleaseIrq(&GKDriverLock, Flags);
+    return Result;
 }
 
 UINT32 KDriverGetCount(VOID) {
@@ -70,36 +115,46 @@ UINT32 KDriverGetCount(VOID) {
 
 VOID* KDriverGetPrivate(KDriver *Driver, USIZE Size) {
     if (Driver == NULLPTR) return NULLPTR;
-    
-    // If the data is already allocated, simply return it
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GKDriverLock);
+
+    // If the private account has already been allocated, we return it.
     if (Driver->Priv != NULLPTR) {
+        SpinLockReleaseIrq(&GKDriverLock, Flags);
         return Driver->Priv;
     }
-    
-    // Checking if there is enough space in the pool
-    if (GKDriverPrivateOffset + Size > 8192) {
-        return NULLPTR; 
+
+    // Checking the place in the pool
+    if (GKDriverPrivateOffset + Size > sizeof(GKDriverPrivatePool)) {
+        SpinLockReleaseIrq(&GKDriverLock, Flags);
+        return NULLPTR;
     }
-    
-    // Select from the pool
-    Driver->Priv = (VOID*)&GKDriverPrivatePool[GKDriverPrivateOffset];
+
+    VOID *Priv = (VOID*)&GKDriverPrivatePool[GKDriverPrivateOffset];
     GKDriverPrivateOffset += Size;
-    
-    // Resetting memory
-    MemSet(Driver->Priv, 0, Size);
-    
-    return Driver->Priv;
+
+    Driver->Priv = Priv;
+    MemSet(Priv, 0, Size);
+
+    SpinLockReleaseIrq(&GKDriverLock, Flags);
+    return Priv;
 }
 
 KDriver* KDriverGetByIndex(UINT32 Index) {
+    UINTPTR Flags = SpinLockAcquireIrq(&GKDriverLock);
+
+    KDriver *Result = NULLPTR;
     ListHead *Pos;
     UINT32 Current = 0;
-    
+
     ListForEach(Pos, &GKDriverList) {
         if (Current == Index) {
-            return ListEntry(Pos, KDriver, Node);
+            Result = ListEntry(Pos, KDriver, Node);
+            break;
         }
         Current++;
     }
-    return NULLPTR;
+
+    SpinLockReleaseIrq(&GKDriverLock, Flags);
+    return Result;
 }

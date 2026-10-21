@@ -49,7 +49,7 @@ STATIC INT CmdRamDiskCreate(INT ArgC, const CHAR *ArgV[]) {
         return INCORRECT_VALUE;
     }
 
-    // Проверяем, нет ли уже такого имени
+    // Checking to see if there is already such a name.
     if (DiskMgrFindDisk(Name)) {
         BaseconPrintf(BASECON_TYPE_ERROR, "Already exists: %s\n", Name);
         return ALREADY_EXISTS;
@@ -88,7 +88,7 @@ STATIC INT CmdRamDiskDestroy(INT ArgC, const CHAR *ArgV[]) {
         return INCORRECT_VALUE;
     }
 
-    // Отмонтируем, если смонтирован
+    // We will unmount it if it is mounted
     CHAR CheckPath[80];
     SnPrintf(CheckPath, sizeof(CheckPath), "%s::/", Name);
     VfsInode *CheckRoot;
@@ -98,14 +98,14 @@ STATIC INT CmdRamDiskDestroy(INT ArgC, const CHAR *ArgV[]) {
         VfsUnmountDrive(Name);
     }
 
-    // Удаляем из DiskMgr
+    // Deleting it from DiskMgr
     INT Ret = DiskMgrUnregisterDisk(D);
     if (Ret != SUCCESS) {
         BaseconPrintf(BASECON_TYPE_ERROR, "Unregister failed (%d)\n", Ret);
         return Ret;
     }
 
-    // Освобождаем память
+    // Freeing up memory
     RamDiskDestroy(D);
 
     BaseconPrintf(BASECON_TYPE_SUCCESS, "Destroyed: %s\n", Name);

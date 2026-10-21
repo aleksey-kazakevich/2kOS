@@ -1,8 +1,10 @@
 #include <Drivers/Acpi/Acpi.h>
+#include <Drivers/Acpi/Aml.h>
 #include <Mem/Allocator.h>
 #include <Lib/String.h>
 #include <Mem/Paging.h>
 #include <SysDevice.h>
+#include <Lib/StdIo.h>
 #include <Asm/Cpu.h>
 #include <KDriver.h>
 #include <Asm/Io.h>
@@ -300,6 +302,8 @@ INT AcpiInit(UINT64 RsdpAddr) {
     if (GAcpi.Madt) {
         AcpiParseMadt();
     }
+	
+	AmlInit(GAcpi.Dsdt, GAcpi.Ssdts, GAcpi.SsdtCount);
     
     KDriverRegister(KDriverGenerateStruct("ACPI", 0, TRUE, &GAcpi, NULLPTR));
 
@@ -308,151 +312,322 @@ INT AcpiInit(UINT64 RsdpAddr) {
     RETURN(SUCCESS);
 }
 
-// Вспомогательная функция для Generic Address Structure
+// Auxiliary function for the Generic Address Structure
 STATIC UINT64 AcpiReadGas(UINT8 *Gas, UINT8 *WidthOut) {
     if (!Gas || Gas[0] == 0) return 0;
     
     UINT8 SpaceId = Gas[0];
     UINT8 BitWidth = Gas[1];
-    UINT8 BitOffset = Gas[2];
     UINT64 Addr = *(UINT64*)(Gas + 4);
     
     if (WidthOut) *WidthOut = BitWidth;
     
-    // Только System I/O и System Memory
-    if (SpaceId != 1 && SpaceId != 0) return 0;
+    // We only support System Memory and System I/O
+    if (SpaceId != 0 && SpaceId != 1) return 0;
     
     return Addr;
 }
 
-// Запись в ACPI регистр через GAS
-STATIC VOID AcpiWriteGas(UINT8 *Gas, UINT32 Value) {
-    if (!Gas || Gas[0] == 0) return;
-    
-    UINT8 SpaceId = Gas[0];
-    UINT8 BitWidth = Gas[1];
-    UINT64 Addr = *(UINT64*)(Gas + 4);
-    
-    if (SpaceId == 1) { // System I/O
-        if (BitWidth <= 8) {
-            Outb((UINT16)Addr, (UINT8)Value);
-        } else if (BitWidth <= 16) {
-            Outw((UINT16)Addr, (UINT16)Value);
-        } else if (BitWidth <= 32) {
-            Outl((UINT16)Addr, Value);
-        }
-    } else if (SpaceId == 0) { // System Memory
+STATIC UINT8 AcpiGetGasWidth(UINT8 *Gas) {
+    if (!Gas || Gas[0] == 0) return 0;
+    return Gas[1];
+}
+
+STATIC UINT8 AcpiGetGasSpaceId(UINT8 *Gas) {
+    if (!Gas || Gas[0] == 0) return 0xFF;
+    return Gas[0];
+}
+
+// Writing to the ACPI register via GAS
+STATIC VOID AcpiWriteGasRaw(UINT64 Addr, UINT8 SpaceId, UINT8 BitWidth, UINT64 Value) {
+    if (SpaceId == 0) {
+        // System Memory (MMIO)
         UINT64 Virt = PhysToVirt(Addr);
+        if (!Virt) return;
         if (BitWidth <= 8) {
             *(volatile UINT8*)Virt = (UINT8)Value;
         } else if (BitWidth <= 16) {
             *(volatile UINT16*)Virt = (UINT16)Value;
         } else if (BitWidth <= 32) {
-            *(volatile UINT32*)Virt = Value;
+            *(volatile UINT32*)Virt = (UINT32)Value;
+        } else {
+            *(volatile UINT64*)Virt = Value;
+        }
+    } else if (SpaceId == 1) {
+        // System I/O
+        if (BitWidth <= 8) {
+            Outb((UINT16)Addr, (UINT8)Value);
+        } else if (BitWidth <= 16) {
+            Outw((UINT16)Addr, (UINT16)Value);
+        } else if (BitWidth <= 32) {
+            Outl((UINT16)Addr, (UINT32)Value);
         }
     }
 }
 
+STATIC UINT64 AcpiReadGasRaw(UINT64 Addr, UINT8 SpaceId, UINT8 BitWidth) {
+    if (SpaceId == 0) {
+        UINT64 Virt = PhysToVirt(Addr);
+        if (!Virt) return 0;
+        if (BitWidth <= 8)  return *(volatile UINT8*)Virt;
+        if (BitWidth <= 16) return *(volatile UINT16*)Virt;
+        if (BitWidth <= 32) return *(volatile UINT32*)Virt;
+        return *(volatile UINT64*)Virt;
+    } else if (SpaceId == 1) {
+        if (BitWidth <= 8)  return Inb((UINT16)Addr);
+        if (BitWidth <= 16) return Inw((UINT16)Addr);
+        if (BitWidth <= 32) return Inl((UINT16)Addr);
+    }
+    return 0;
+}
+
+// Combined recording in the GAS region (auto space + width)
+STATIC VOID AcpiWriteGas(UINT8 *Gas, UINT64 Value) {
+    if (!Gas || Gas[0] == 0) return;
+    UINT8 SpaceId = Gas[0];
+    UINT8 BitWidth = Gas[1];
+    UINT64 Addr = *(UINT64*)(Gas + 4);
+
+    // GAS can be both Memory and IO — defined by SpaceId
+    if (SpaceId == 0 || SpaceId == 1) {
+        AcpiWriteGasRaw(Addr, SpaceId, BitWidth, Value);
+    }
+}
+
+// ============================================================================
+// PM1 helpers
+// ============================================================================
+
+STATIC UINT16 AcpiPm1ControlValue(UINT8 SlpTyp) {
+    // SLP_TYP[2:0] in bits 12:10, SLP_EN — bit 13
+    return ((UINT16)(SlpTyp & 0x07) << 10) | (1U << 13);
+}
+
+// Disable all wake events and GPE before bedtime
+STATIC VOID AcpiDisableWakeEvents(VOID) {
+    FADT *Fadt = GAcpi.Fadt;
+    if (!Fadt) return;
+
+    // PM1_EN = PM1_STS + 2 (2 bytes)
+    if (Fadt->Pm1aEvtBlk) {
+        Outw(Fadt->Pm1aEvtBlk + 2, 0x0000);
+    }
+    if (Fadt->Pm1bEvtBlk) {
+        Outw(Fadt->Pm1bEvtBlk + 2, 0x0000);
+    }
+
+    // Clearing PM1_STS (write-1-to-clear)
+    if (Fadt->Pm1aEvtBlk) Outw(Fadt->Pm1aEvtBlk, 0xFFFF);
+    if (Fadt->Pm1bEvtBlk) Outw(Fadt->Pm1bEvtBlk, 0xFFFF);
+
+    // GPE0: GPE0_STS = Gpe0Blk, GPE0_EN = Gpe0Blk + Gpe0BlkLen/2
+    if (Fadt->Gpe0Blk && Fadt->Gpe0BlkLen) {
+        UINT8 Len = Fadt->Gpe0BlkLen;
+        UINT16 Gpe0Sts = Fadt->Gpe0Blk;
+        UINT16 Gpe0En  = Fadt->Gpe0Blk + Len / 2;
+
+        for (UINT16 Off = 0; Off + 2 <= Len / 2; Off += 2) {
+            Outw(Gpe0Sts + Off, 0xFFFF);
+        }
+        for (UINT16 Off = 0; Off + 2 <= Len / 2; Off += 2) {
+            Outw(Gpe0En + Off, 0xFFFF);
+        }
+    }
+    if (Fadt->Gpe1Blk && Fadt->Gpe1BlkLen) {
+        UINT8 Len = Fadt->Gpe1BlkLen;
+        UINT16 Gpe1Sts = Fadt->Gpe1Blk;
+        UINT16 Gpe1En  = Fadt->Gpe1Blk + Len / 2;
+
+        for (UINT16 Off = 0; Off + 2 <= Len / 2; Off += 2) {
+            Outw(Gpe1Sts + Off, 0xFFFF);
+        }
+        for (UINT16 Off = 0; Off + 2 <= Len / 2; Off += 2) {
+            Outw(Gpe1En + Off, 0xFFFF);
+        }
+    }
+}
+
+// Write PM1 Control (SLP_TYP + SLP_EN) to both blocks
+STATIC VOID AcpiWritePm1Control(UINT8 SlpTyp) {
+    FADT *Fadt = GAcpi.Fadt;
+    if (!Fadt) return;
+
+    UINT16 SleepValue = AcpiPm1ControlValue(SlpTyp);
+
+    // PM1a
+    UINT64 Pm1aAddr = AcpiReadGas(Fadt->XPm1aCntBlk, NULLPTR);
+    UINT8 Pm1aSpace = AcpiGetGasSpaceId(Fadt->XPm1aCntBlk);
+    UINT8 Pm1aWidth = AcpiGetGasWidth(Fadt->XPm1aCntBlk);
+
+    if (Pm1aAddr && (Pm1aSpace == 0 || Pm1aSpace == 1)) {
+        AcpiWriteGasRaw(Pm1aAddr, Pm1aSpace, Pm1aWidth ? Pm1aWidth : 16, SleepValue);
+    } else if (Fadt->Pm1aCntBlk) {
+        Outw(Fadt->Pm1aCntBlk, SleepValue);
+    }
+
+    // PM1b
+    UINT64 Pm1bAddr = AcpiReadGas(Fadt->XPm1bCntBlk, NULLPTR);
+    UINT8 Pm1bSpace = AcpiGetGasSpaceId(Fadt->XPm1bCntBlk);
+    UINT8 Pm1bWidth = AcpiGetGasWidth(Fadt->XPm1bCntBlk);
+
+    if (Pm1bAddr && (Pm1bSpace == 0 || Pm1bSpace == 1)) {
+        AcpiWriteGasRaw(Pm1bAddr, Pm1bSpace, Pm1bWidth ? Pm1bWidth : 16, SleepValue);
+    } else if (Fadt->Pm1bCntBlk) {
+        Outw(Fadt->Pm1bCntBlk, SleepValue);
+    }
+}
+
+// ============================================================================
+// Public power management
+// ============================================================================
+
 VOID AcpiReboot(VOID) {
-    if (!GAcpi.Fadt) {
-        Outb(0x64, 0xFE);
-        return;
+    //Calling _PTS(5) is not necessary, but some BIOSes expect
+    AmlValue Res;
+    AmlValue Arg = AmlMakeInteger(5);
+    AmlCallMethod("\\_PTS", 1, &Arg, &Res);
+
+    if (GAcpi.Fadt) {
+        FADT *Fadt = GAcpi.Fadt;
+        UINT8 *ResetReg = Fadt->ResetReg;
+        UINT8 ResetValue = Fadt->ResetValue;
+
+        if (ResetReg[0] != 0) {
+            UINT8 SpaceId = ResetReg[0];
+            UINT8 BitWidth = ResetReg[1];
+            UINT64 Addr = *(UINT64*)(ResetReg + 4);
+
+            // Reset Register — usually Generic I/O
+            if (SpaceId == 0 || SpaceId == 1) {
+                AcpiWriteGasRaw(Addr, SpaceId, BitWidth, ResetValue);
+            }
+        }
     }
-    
-    // Используем Reset Register через GAS
-    UINT8 *ResetReg = GAcpi.Fadt->ResetReg;
-    UINT8 ResetValue = GAcpi.Fadt->ResetValue;
-    
-    if (ResetReg[0] != 0) {
-        AcpiWriteGas(ResetReg, ResetValue);
-    } else {
-        // Fallback: keyboard controller reset
-        Outb(0x64, 0xFE);
+
+    // Fallback: keyboard controller reset
+    Outb(0x64, 0xFE);
+
+    // Give the hardware a chance
+    for (INT I = 0; I < 100000; I++) IoWait();
+
+    // If it didn't work, it's a triple mistake.
+    for (INT Attempt = 0; Attempt < 3; Attempt++) {
+        Outb(0xCF9, 0x06);
+        for (INT I = 0; I < 10000; I++) IoWait();
     }
-    
-    // Задержка
-    for (INT I = 0; I < 100000; I++) {
-        IoWait();
-    }
-    
-    while(1) {
-        Halt();
-    }
+
+    while (1) Halt();
 }
 
 VOID AcpiShutdown(VOID) {
     if (!GAcpi.Fadt) {
-        return;
+        // No FADT — we can't switch off
+        while (1) Halt();
     }
-    
+
     FADT *Fadt = GAcpi.Fadt;
-    
-    // 1. Получаем SLP_TYP для S5 из FADT
-    // В ACPI 1.0 - фиксированное значение 5
-    // В ACPI 2.0+ может быть в X_PM1aCntBlk
-    UINT8 SleepTypeS5 = 5; // По умолчанию
-    
-    // 2. Находим PM1a Control Register (через GAS если доступен)
-    UINT8 *Pm1aCnt = Fadt->XPm1aCntBlk;
-    UINT16 Pm1aPort = Fadt->Pm1aCntBlk;
-    
-    // Если есть X_PM1aCntBlk - используем его
-    UINT64 Pm1aAddr = AcpiReadGas(Pm1aCnt, NULLPTR);
-    BOOL UseGas = (Pm1aAddr != 0);
-    
-    // 3. Находим PM1b Control Register
-    UINT8 *Pm1bCnt = Fadt->XPm1bCntBlk;
-    UINT16 Pm1bPort = Fadt->Pm1bCntBlk;
-    UINT64 Pm1bAddr = AcpiReadGas(Pm1bCnt, NULLPTR);
-    
-    // 4. Отключаем все пробуждения (GPE)
-    if (Fadt->Gpe0Blk) {
-        Outw(Fadt->Gpe0Blk, 0); // GPE0_EN
-    }
-    if (Fadt->Gpe1Blk) {
-        Outw(Fadt->Gpe1Blk, 0); // GPE1_EN
-    }
-    
-    // 5. Маскируем все прерывания
+
+    // 1. Calling _PTS(5) — Prepare To Sleep S5
+    // _PTS is called AFTER interrupts are disabled, but BEFORE writing to PM1.
+    // Not all BIOSes have _PTS, so we ignore the result.
     LocalInterruptsDisable();
-    
-    // 6. Небольшая задержка
-    for (INT I = 0; I < 1000; I++) {
-        IoWait();
+
+    AmlValue Arg = AmlMakeInteger(5);
+    AmlValue Res;
+    AmlCallMethod("\\_PTS", 1, &Arg, &Res);
+
+    // Disabling wake events and GPE
+    AcpiDisableWakeEvents();
+
+    // Let the gland calm down
+    for (INT I = 0; I < 10000; I++) IoWait();
+
+    // 4. Get SLP_TYP for S5 from AML
+    UINT8 SlpTyp = 5;   // default fallback
+    BOOL HaveAml = AmlGetS5SlpTyp(&SlpTyp);
+
+    // Let's put together a list of candidates: first AML, then fallback
+    UINT8 Candidates[8];
+    UINT8 NumCandidates = 0;
+
+    if (HaveAml) {
+        Candidates[NumCandidates++] = SlpTyp;
     }
-    
-    // 7. Записываем SLP_TYP_S5 | SLP_EN
-    UINT16 SleepValue = (UINT16)((SleepTypeS5 << 10) | (1 << 13)); // SLP_TYP_S5 + SLP_EN
-    
-    // Пишем в PM1a
-    if (UseGas) {
-        AcpiWriteGas(Pm1aCnt, SleepValue);
-    } else if (Pm1aPort) {
-        Outw(Pm1aPort, SleepValue);
+
+    // Standard SLP_TYP values for S5 (all possible):
+    // 0, 1, 4, 5, 6, 7 — depends on the chipset
+    STATIC const UINT8 Fallbacks[] = { 5, 0, 7, 1, 4, 6 };
+    for (UINT8 I = 0; I < sizeof(Fallbacks); I++) {
+        if (HaveAml && Fallbacks[I] == SlpTyp) continue;
+        if (NumCandidates >= sizeof(Candidates)) break;
+        Candidates[NumCandidates++] = Fallbacks[I];
     }
-    
-    // Пишем в PM1b (если есть)
-    if (Pm1bAddr) {
-        AcpiWriteGas(Pm1bCnt, SleepValue);
-    } else if (Pm1bPort) {
-        Outw(Pm1bPort, SleepValue);
+
+    // 5. We try every SLP_TYP
+    for (UINT8 Idx = 0; Idx < NumCandidates; Idx++) {
+        AcpiWritePm1Control(Candidates[Idx]);
+
+        // If SLP_EN worked, we won't be coming back here.
+        // If SLP_EN works, we won't be coming back here.
+        for (INT I = 0; I < 200000; I++) IoWait();
     }
-    
-    // 8. КРИТИЧЕСКИ ВАЖНО: ждём завершения перехода!
-    // Даём контроллеру время на переход в S5
-    for (INT I = 0; I < 500000; I++) {
-        IoWait();
+
+    // Nothing worked.
+    while (1) Halt();
+}
+
+// ============================================================================
+// Sleep (S1..S4)
+// ============================================================================
+
+// An auxiliary function is to prepare the system for sleep.
+STATIC VOID AcpiPrepareForSleep(UINT8 SleepState) {
+    LocalInterruptsDisable();
+
+    // Calling _PTS(SleepState) — Prepare To Sleep
+    AmlValue Arg = AmlMakeInteger(SleepState);
+    AmlValue Res;
+    AmlCallMethod("\\_PTS", 1, &Arg, &Res);
+
+    // Disable wake events and GPE
+    AcpiDisableWakeEvents();
+
+    for (INT I = 0; I < 10000; I++) IoWait();
+}
+
+// Falling asleep S1..S4
+// SleepState: 1, 2, 3, 4
+BOOL AcpiSleep(UINT8 SleepState) {
+    if (!GAcpi.Fadt) return FALSE;
+    if (SleepState < 1 || SleepState > 5) return FALSE;
+
+    // S5 = shutdown, processed separately
+    if (SleepState == 5) {
+        AcpiShutdown();
+        return TRUE;
     }
-    
-    // 9. Финальная задержка
-    for (INT I = 0; I < 100000; I++) {
-        IoWait();
+
+    // Get SLP_TYP from AML (\_S1,\_S2, \_S3, \_S4)
+    CHAR Name[5];
+    SnPrintf(Name, sizeof(Name), "_S%u", SleepState);
+
+    UINT8 SlpTyp = 0;
+    BOOL HaveAml = AmlGetSleepSlpTyp(Name, &SlpTyp);
+    if (!HaveAml) {
+        // There is no method — the state is not maintained.
+        return FALSE;
     }
-    
-    // 10. Если ещё живы - вешаемся
-    while(1) {
-        Halt();
-    }
+
+    AcpiPrepareForSleep(SleepState);
+
+    // Record PM1 Control
+    AcpiWritePm1Control(SlpTyp);
+
+    // If we returned, the dream failed.
+    for (INT I = 0; I < 200000; I++) IoWait();
+
+    LocalInterruptsEnable();
+    return FALSE;
 }
 
 SysDevice *AcpiGetSysDevice(VOID) {
@@ -582,8 +757,8 @@ STATIC VOID AcpiRegMcfg(VOID) {
 }
 
 SysDevice *AcpiRegisterSysDevices(VOID) {
-    if (GAcpiDevice) return GAcpiDevice;   // уже зарегистрировано
-    if (!SysDeviceGetRoot()) return NULLPTR; // SysDevice ещё не готов
+    if (GAcpiDevice) return GAcpiDevice;   // already registered
+    if (!SysDeviceGetRoot()) return NULLPTR; // SysDevice is not ready yet
 
     AcpiRegBus();
     AcpiRegFadt();

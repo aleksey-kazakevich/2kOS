@@ -6,8 +6,9 @@
 default rel
 
 extern SyscallHandler
-extern SyscallStackTop
-extern SyscallUserRsp
+
+%define PERCPU_SYSCALL_STACKTOP  0x30
+%define PERCPU_SYSCALL_USERRSP   0x38
 
 USER_CS equ 0x1B
 USER_SS equ 0x23
@@ -32,16 +33,17 @@ USER_SS equ 0x23
 
 global SyscallEntry
 SyscallEntry:
-    mov [SyscallUserRsp], rsp
-    mov rsp, [SyscallStackTop]
+    ; %gs.base = PerCpu*
+    mov [gs:PERCPU_SYSCALL_USERRSP], rsp
+    mov rsp, [gs:PERCPU_SYSCALL_STACKTOP]
     and rsp, ~0xF
 
-    ; IRET frame: RIP, CS, RFLAGS, RSP, SS
+    ; Build IRET-frame (5 qword) + GPR-frame (15 qword)
     push USER_SS
-    push qword [SyscallUserRsp]
-    push r11
+    push qword [gs:PERCPU_SYSCALL_USERRSP]
+    push r11                        ; RFLAGS
     push USER_CS
-    push rcx
+    push rcx                        ; RIP (SYSCALL saves it in rcx)
 
     push r15
     push r14
@@ -63,7 +65,7 @@ SyscallEntry:
     sti
 
     ; User ABI: rax=nr, rdi, rsi, rdx, r10, r8, r9
-    ; SysV:     rdi, rsi, rdx, rcx, r8, r9, stack
+    ; SysV:     rdi, rsi, rdx, rcx, r8, r9
     push r9
     mov r9, r8
     mov r8, r10
@@ -75,7 +77,7 @@ SyscallEntry:
     call SyscallHandler
     add rsp, 8
 
-    mov [rsp], rax
+    mov [rsp], rax                  ; result into saved rax
 
     cli
     POP_GPRS
@@ -113,9 +115,5 @@ SyscallInt80Handler:
     mov [rsp], rax
     POP_GPRS
     iretq
-
-global SyscallSetup
-SyscallSetup:
-    ret
 
 section .note.GNU-stack

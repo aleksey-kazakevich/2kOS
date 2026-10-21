@@ -569,16 +569,16 @@ STATIC UINT8 CharToHexDigit(CHAR C) {
     if (C >= '0' && C <= '9') return (UINT8)(C - '0');
     if (C >= 'A' && C <= 'F') return (UINT8)(C - 'A' + 10);
     if (C >= 'a' && C <= 'f') return (UINT8)(C - 'a' + 10);
-    return 0xFF; // маркер ошибки
+    return 0xFF; // error marker
 }
 
 UINT8 AToHex(const CHAR *Str) {
     if (!Str) return 0;
 
-    // Пропускаем ведущие пробелы
+    // Skip the leading spaces
     while (*Str == ' ') ++Str;
 
-    // Проверяем и пропускаем префикс 0x / 0X
+    // We check and skip the prefix 0x / 0X
     if (Str[0] == '0' && (Str[1] == 'x' || Str[1] == 'X')) {
         Str += 2;
     }
@@ -586,7 +586,7 @@ UINT8 AToHex(const CHAR *Str) {
     UINT8 High = CharToHexDigit(Str[0]);
     UINT8 Low  = CharToHexDigit(Str[1]);
 
-    // Если хотя бы один символ не hex-цифра — ошибка
+    // If at least one character is not a hex digit, it is an error.
     if ((High == 0xFF) || (Low == 0xFF)) {
         return 0;
     }

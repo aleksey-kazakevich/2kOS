@@ -1,3 +1,4 @@
+#include <Drivers/Ps2/Ps2Keyboard.h>
 #include <Drivers/Irq/Apic/Ioapic.h>
 #include <Drivers/Irq/Apic/Apic.h>
 #include <Drivers/Ps2/Ps2Mouse.h>
@@ -424,7 +425,7 @@ STATIC VOID ProcessMousePacket(VOID) {
 // Handle one byte
 // ============================================================================
 
-STATIC VOID Ps2MouseHandleByte(UINT8 Byte) {
+VOID Ps2MouseHandleByte(UINT8 Byte) {
     switch (GMouse.State) {
         case PS2_MOUSE_STATE_IGNORE:
             return;
@@ -485,12 +486,22 @@ STATIC VOID Ps2MouseHandleByte(UINT8 Byte) {
 // ============================================================================
 
 VOID Ps2MouseHandleIRQ(VOID) {
-    UINT8 Byte = Ps2ReadData();
-    
-    Ps2MouseHandleByte(Byte);
-    
+    while (Inb(PS2_PORT_STATUS) & PS2_STATUS_OUTPUT_FULL) {
+        UINT8 Status = Inb(PS2_PORT_STATUS);
+        UINT8 Byte = Inb(PS2_PORT_DATA);
+
+        if (Status & PS2_STATUS_AUXB) {
+            // Our byte
+            Ps2MouseHandleByte(Byte);
+        } else {
+            // The byte of the keyboard is given to the keyboard handler.
+            Ps2HandleScanByte(Byte);
+        }
+    }
+
     ApicEoi();
     Ps2MouseDispatchEvents();
+    Ps2KeyboardDispatchEvents();
 }
 
 EXTERN(VOID, Ps2MouseIrq(VOID));
@@ -728,11 +739,11 @@ STATIC const CHAR *Ps2MouseTypeToString(UINT8 Type) {
 SysDevice *Ps2MouseRegisterSysDevice(VOID) {
     if (!GMouse.Initialized) return NULLPTR;
 
-    // Уже зарегистрирована?
+    // Already registered?
     SysDevice *Existing = SysDeviceFind("MOUSE");
     if (Existing) return Existing;
 
-    // Родитель — PS2 bus
+    // Parent — PS2 bus
     SysDevice *Parent = Ps2GetSysDevice();
     if (!Parent) Parent = SysDeviceGetRoot();
     if (!Parent) return NULLPTR;
@@ -743,7 +754,7 @@ SysDevice *Ps2MouseRegisterSysDevice(VOID) {
                                       SYSDEV_TYPE_INPUT);
     if (!Dev) return NULLPTR;
 
-    // --- Ресурсы ---
+    // Resources
 
     if (GMouse.Gsi) {
         SysDeviceAddResource(Dev, SYSDEV_RES_IRQ, GMouse.Gsi, 1);
@@ -751,7 +762,7 @@ SysDevice *Ps2MouseRegisterSysDevice(VOID) {
     }
     SysDeviceSetPropU32(Dev, "vector", MOUSE);
 
-    // --- Свойства ---
+    // Properties
 
     SysDeviceSetPropU32(Dev, "port", 2);
     SysDeviceSetPropU32(Dev, "mouse_type", GMouse.Type);
@@ -765,7 +776,7 @@ SysDevice *Ps2MouseRegisterSysDevice(VOID) {
     SysDeviceSetPropU64(Dev, "error_count", GMouse.ErrorCount);
     SysDeviceSetPropU32(Dev, "out_of_sync", GMouse.OutOfSyncCount);
 
-    // Текущее состояние кнопок
+    // Current status of the buttons
     SysDeviceSetPropU32(Dev, "pos_x", (UINT32)GMouse.MouseState.X);
     SysDeviceSetPropU32(Dev, "pos_y", (UINT32)GMouse.MouseState.Y);
     SysDeviceSetPropU32(Dev, "buttons",
@@ -773,7 +784,7 @@ SysDevice *Ps2MouseRegisterSysDevice(VOID) {
                         (GMouse.MouseState.RightButton  ? 2 : 0) |
                         (GMouse.MouseState.MiddleButton ? 4 : 0));
 
-    // --- Привязка к KDriver ---
+    // Linking to KDriver
 
     if (GMouse.Driver) {
         SysDeviceBindDriver(Dev, GMouse.Driver);

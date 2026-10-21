@@ -23,9 +23,9 @@ INT CmdUnmountHandler(INT ArgC, const CHAR *ArgV[]) {
     CHAR MountedList[256];
     INT Result;
 
-    // Проверяем аргументы
+    // Checking the arguments
     if (ArgC < 2) {
-        // Если нет аргументов — показываем список смонтированных дисков
+        // If there are no arguments, we show a list of mounted disks.
         if (VfsListMountedDrives(MountedList, sizeof(MountedList)) > 0) {
             BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
             BaseconPrintf(BASECON_TYPE_NORMAL, "Mounted drives:\n");
@@ -41,14 +41,14 @@ INT CmdUnmountHandler(INT ArgC, const CHAR *ArgV[]) {
 
     DiskName = ArgV[1];
 
-    // Ищем диск
+    // Looking for a disk
     D = DiskMgrFindDisk(DiskName);
     if (!D) {
         BaseconPrintf(BASECON_TYPE_ERROR, "Disk not found: %s\n", DiskName);
         return -1;
     }
 
-    // Проверяем, смонтирован ли диск
+    // Checking if the disk is mounted
     CHAR CheckPath[64];
     SnPrintf(CheckPath, sizeof(CheckPath), "%s::/", D->Name);
     VfsInode *CheckRoot;
@@ -58,7 +58,7 @@ INT CmdUnmountHandler(INT ArgC, const CHAR *ArgV[]) {
     }
     VfsInodeUnref(CheckRoot);
 
-    // Проверяем, не находимся ли мы внутри этого диска
+    // We're checking to see if we're inside this disk.
     if (VfsCurrentDir) {
         CHAR CurrentPath[PATH_MAX];
         if (VfsBuildPath(VfsCurrentDir, CurrentPath, PATH_MAX) == 0) {
@@ -69,7 +69,7 @@ INT CmdUnmountHandler(INT ArgC, const CHAR *ArgV[]) {
         }
     }
 
-    // Размонтируем
+    // Unmount it
     BaseconPrintf(BASECON_TYPE_NORMAL, "Unmounting %s...\n", D->Name);
     
     Result = VfsUnmountDrive(D->Name);

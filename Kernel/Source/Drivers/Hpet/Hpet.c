@@ -82,7 +82,7 @@ INT HpetInit(VOID) {
     }
 
     if (GHpet.PeriodFs > 100000000ULL) {
-        // Типичный period для HPET: 1..100 нс в фемтосекундах → 1e6..1e8
+        // Typical HPET period: 1..100 ns in femtoseconds → 1e6..1e8
         RETURN(INCORRECT_VALUE);
     }
 
@@ -99,7 +99,7 @@ INT HpetInit(VOID) {
         RETURN(DEVICE_ERROR);
     }
 
-    // Проверяем, что счётчик реально инкрементируется
+    // We check that the counter is actually incremented.
     UINT64 C1 = HpetReadCounter();
     for (volatile INT I = 0; I < 1000000; I++) {
         asm volatile("pause");
@@ -264,11 +264,11 @@ UINT32 HpetCalibrateApicTimer(UINT32 DesiredMs) {
 SysDevice *HpetRegisterSysDevice(VOID) {
     if (!GHpet.Available) return NULLPTR;
 
-    // Проверяем, что HPET ещё не зарегистрирован
+    // We check that HPET has not been registered yet.
     SysDevice *Existing = SysDeviceFind("HPET");
     if (Existing) return Existing;
 
-    // Родитель — ACPI bus, если он есть. Иначе — root.
+    //The parent is ACPI bus, if there is one. Otherwise— it's root.
     SysDevice *Parent = AcpiGetSysDevice();
     if (!Parent) Parent = SysDeviceGetRoot();
     if (!Parent) return NULLPTR;
@@ -279,20 +279,20 @@ SysDevice *HpetRegisterSysDevice(VOID) {
                                       SYSDEV_TYPE_TIMER);
     if (!Dev) return NULLPTR;
 
-    // --- Ресурсы ---
+    // Resources
 
-    // MMIO регион (обычно 1024 байта)
+    // MMIO region (usually 1024 bytes)
     if (GHpet.Base) {
         UINT64 HpetPhys = VirtToPhys((UINT64)(UINTPTR)GHpet.Base);
         SysDeviceAddResource(Dev, SYSDEV_RES_MMIO, HpetPhys, 1024);
     }
 
-    // --- Свойства ---
+    // Properties
 
     SysDeviceSetPropU64(Dev, "freq_hz", GHpet.FrequencyHz);
     SysDeviceSetPropU64(Dev, "period_fs", GHpet.PeriodFs);
     SysDeviceSetPropU32(Dev, "is_64bit", GHpet.Is64Bit ? 1 : 0);
-    SysDeviceSetPropU32(Dev, "comparators", 0);   // узнаем из Capabilities при желании
+    SysDeviceSetPropU32(Dev, "comparators", 0);   // we will find out from Capabilities if desired.
 
     if (GHpet.Base) {
         SysDeviceSetPropHex(Dev, "phys_addr",
@@ -301,13 +301,13 @@ SysDevice *HpetRegisterSysDevice(VOID) {
                             (UINT64)(UINTPTR)GHpet.Base);
     }
 
-    // Считаем, сколько нс длится один тик (обратная величина частоты)
+    // We calculate how many ns one tick lasts (the inverse of the frequency)
     if (GHpet.FrequencyHz) {
         SysDeviceSetPropU64(Dev, "tick_ns",
                             1000000000ULL / GHpet.FrequencyHz);
     }
 
-    // --- Привязка к KDriver ---
+    // Linking to KDriver
 
     if (GHpet.Driver) {
         SysDeviceBindDriver(Dev, GHpet.Driver);

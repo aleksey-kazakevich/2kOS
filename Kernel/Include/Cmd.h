@@ -5,40 +5,40 @@
 
 typedef INT (*CmdHandler)(INT ArgC, const CHAR *ArgV[]);
 
-// Структура встроенной команды
+// The structure of the built‑in command
 typedef struct CmdCommand {
-    ListHead Node;              // Для связного списка
-    const CHAR *Name;           // Имя команды (например, "help")
-    const CHAR *Description;    // Краткое описание (для help)
-    CmdHandler Handler;         // Функция-обработчик
-    BOOL Builtin;              // TRUE = встроенная, FALSE = внешняя (для будущего)
+    ListHead Node;              // For a linked list
+    const CHAR *Name;           // Command name (e.g., "help")
+    const CHAR *Description;    // Brief description (for help)
+    CmdHandler Handler;         // Handler function
+    BOOL Builtin;              // TRUE = built‑in, FALSE = external (for the future)
 } CmdCommand;
 
-// Инициализация системы команд (вызывать при старте)
+// Initialization of the command system (call at startup)
 VOID CmdInit(VOID);
 
-// Зарегистрировать встроенную команду
+// Register the built‑in command
 INT CmdRegisterBuiltin(const CHAR *Name, const CHAR *Description, CmdHandler Handler);
 
-// Удалить встроенную команду
+// Delete the built‑in command
 INT CmdUnregisterBuiltin(const CHAR *Name);
 
-// Найти команду по имени
+// Find the team by name
 CmdCommand* CmdFind(const CHAR *Name);
 
-// Выполнить команду по строке
-// Возвращает: код завершения команды или -1 если команда не найдена
+// Execute the command line by line
+// Returns: the command completion code or -1 if the command is not found
 INT CmdExecute(const CHAR *CmdLine);
 
-// Получить список всех команд (для help)
+// Get a list of all commands (for help)
 CmdCommand* CmdGetFirst(VOID);
 CmdCommand* CmdGetNext(CmdCommand *Cmd);
 
-// Количество зарегистрированных команд
+// The number of registered teams
 UINT32 CmdGetCount(VOID);
 
-// Вывести список команд в Basecon
+// Print the list of commands in Basecon
 VOID CmdPrintList(VOID);
 
-// Обработчик ввода из Basecon
+// Input handler from Basecon
 VOID CmdBaseconHandler(const CHAR *Input, VOID *UserData);

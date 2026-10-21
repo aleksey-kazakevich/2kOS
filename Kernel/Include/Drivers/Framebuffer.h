@@ -1,6 +1,7 @@
 #pragma once
 
 #include <SysDevice.h>
+#include <SpinLock.h>
 #include <Types.h>
 #include <Rgb.h>
 
@@ -64,6 +65,8 @@ typedef struct {
     INT32 ClipX1, ClipY1;
     INT32 ClipX2, ClipY2;
     BOOL Initialized;
+
+    SpinLock Lock;
 } Framebuffer;
 
 typedef struct {
@@ -110,10 +113,10 @@ INT FramebufferGetLayerCount(VOID);
 
 // --- Special functions for cursor ---
 INT FramebufferInitCursorLayer(VOID);
-VOID FramebufferSetCursorPosition(INT32 X, INT32 Y);
-VOID FramebufferSetCursorSize(UINT32 W, UINT32 H);
-VOID FramebufferDrawCursor(UINT32 *CursorBuffer, UINT32 W, UINT32 H);
-
+VOID FramebufferDrawCursor(INT32 X, INT32 Y, UINT32 W, UINT32 H,
+                           INT32 PrevX, INT32 PrevY,
+                           UINT32 PrevW, UINT32 PrevH, BOOL PrevValid,
+                           const UINT32 *CursorBuffer);
 // --- Rendering functions ---
 VOID FramebufferDrawChar(CHAR C, INT32 X, INT32 Y, FramebufferColor Fg, FramebufferColor Bg);
 VOID FramebufferDrawString(const CHAR *Str, INT32 X, INT32 Y, FramebufferColor Fg, FramebufferColor Bg);

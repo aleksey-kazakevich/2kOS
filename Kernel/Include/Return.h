@@ -18,7 +18,7 @@
 #define TIMEOUT -13
 #define DEVICE_ERROR -14
 #define DEVICE_INVALID -15
-#define NOT_READY - 16
+#define NOT_READY -16
 #define PERMISSION_DENIED -17
 #define OPERATION_DISABLED -18
 #define CANCELED -19

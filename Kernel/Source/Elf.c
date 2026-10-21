@@ -49,7 +49,7 @@ STATIC UINT64 ElfAlignUp(UINT64 Val, UINT64 Align) {
     return (Val + Align - 1) & ~(Align - 1);
 }
 
-// Выделить и замапить одну страницу в Pml4
+// Select and color one page in Pml4
 STATIC VOID *ElfAllocPage(UINT64 *Pml4, UINT64 Vaddr, UINT64 Flags) {
     VOID *Phys = PhysAllocAllocatePage(PhysAllocGet());
     if (!Phys) return NULLPTR;
@@ -76,7 +76,7 @@ STATIC INT ElfMapSegment(UINT64 *Pml4,
     if (Ph->PType != PT_LOAD) return SUCCESS;
     if (Ph->PMemsz == 0) return SUCCESS;
 
-    // Проверки
+    // Checks
     if (Ph->PFilesz > Ph->PMemsz) return INCORRECT_VALUE;
     if (Ph->POffset + Ph->PFilesz > ImageSize) return INCORRECT_VALUE;
     if (Ph->PVaddr < USER_CODE_VADDR) return INCORRECT_VALUE;
@@ -87,23 +87,23 @@ STATIC INT ElfMapSegment(UINT64 *Pml4,
     UINT64 SegEnd   = ElfAlignUp(Ph->PVaddr + Ph->PMemsz, PAGE_SIZE);
     if (SegEnd <= SegStart) return INCORRECT_VALUE;
 
-    // Флаги страниц
+    // Page Flags
     UINT64 Flags = PTE_USER | PTE_PRESENT;
     if (Ph->PFlags & PF_W) Flags |= PTE_WRITABLE;
     if (!(Ph->PFlags & PF_X)) Flags |= PTE_NO_EXEC;
 
-    // Загрузка
+    // Load
     const UINT8 *SrcBase = Image + Ph->POffset;
 
     for (UINT64 Va = SegStart; Va < SegEnd; Va += PAGE_SIZE) {
         UINT8 *Dst = (UINT8 *)ElfAllocPage(Pml4, Va, Flags);
         if (!Dst) return NO_MEMORY;
 
-        // Определяем, сколько байт файла попадает в эту страницу
+        // We determine how many bytes of the file end up on this page.
         UINT64 PageFileStart = Va;
         UINT64 PageFileEnd   = Va + PAGE_SIZE;
 
-        // Отсекаем по границам сегмента в файле
+        // Cutting off the segment boundaries in the file
         UINT64 SegFileStart = Ph->PVaddr;
         UINT64 SegFileEnd   = Ph->PVaddr + Ph->PFilesz;
 
@@ -137,11 +137,11 @@ STATIC UINT64 ElfSetupStack(UINT64 *Pml4,
 
     UINT64 Sp = USER_STACK_TOP;
 
-    // Ограничение
+    // Limitation
     if (ArgC < 0) ArgC = 0;
     if (ArgC > 32) ArgC = 32;
 
-    // 1. Копируем строки argv (сверху вниз)
+    // 1. Copying the argv strings (from top to bottom)
     UINT64 ArgvPtrs[32];
     for (INT I = ArgC - 1; I >= 0; I--) {
         USIZE Len = StrLen(ArgV[I]) + 1;
@@ -151,12 +151,12 @@ STATIC UINT64 ElfSetupStack(UINT64 *Pml4,
         ArgvPtrs[I] = Sp;
     }
 
-    // 2. NULL-терминатор argv[]
+    // 2. NULL-argv terminator[]
     Sp -= 8;
     UINT64 Zero = 0;
     if (PagingCopyToUser(Pml4, Sp, &Zero, 8) != SUCCESS) return 0;
 
-    // 3. Указатели argv[]
+    // 3. argv pointers[]
     for (INT I = ArgC - 1; I >= 0; I--) {
         Sp -= 8;
         if (PagingCopyToUser(Pml4, Sp, &ArgvPtrs[I], 8) != SUCCESS) return 0;
@@ -167,7 +167,7 @@ STATIC UINT64 ElfSetupStack(UINT64 *Pml4,
     UINT64 ArgcVal = (UINT64)ArgC;
     if (PagingCopyToUser(Pml4, Sp, &ArgcVal, 8) != SUCCESS) return 0;
 
-    // Выравнивание
+    // Alignment
     Sp &= ~0xFULL;
 
     return Sp;
@@ -181,6 +181,7 @@ INT ElfLoad(const VOID *Image, USIZE ImageSize,
             UINT64 **OutPageTable,
             UINT64 *OutEntry,
             UINT64 *OutStackTop,
+	    UINT64 *OutHeapStart,
             INT ArgC, const CHAR *ArgV[]) {
 
     if (!Image || !OutPageTable || !OutEntry || !OutStackTop)
@@ -191,12 +192,12 @@ INT ElfLoad(const VOID *Image, USIZE ImageSize,
 
     const Elf64Ehdr *Ehdr = (const Elf64Ehdr *)Image;
 
-    // Проверяем entry point
+    // Checking the entry point
     UINT64 Entry = Ehdr->EEntry;
     if (Entry < USER_CODE_VADDR || Entry >= USER_STACK_TOP)
         RETURN(INCORRECT_VALUE);
 
-    // Считаем диапазон адресов
+    // Counting the address range
     UINT64 MinVaddr = UINT64MAX;
     UINT64 MaxVaddr = 0;
     BOOL HasLoad = FALSE;
@@ -218,11 +219,11 @@ INT ElfLoad(const VOID *Image, USIZE ImageSize,
     if (MinVaddr < USER_CODE_VADDR) RETURN(INCORRECT_VALUE);
     if (MaxVaddr >= USER_STACK_TOP - USER_STACK_DEFAULT) RETURN(INCORRECT_VALUE);
 
-    // Создаём адресное пространство
+    // Creating an address space
     UINT64 *Pml4 = PagingCreateUserAddressSpace();
     if (!Pml4) RETURN(NO_MEMORY);
 
-    // Мапим все сегменты
+    // Map all segments
     for (INT I = 0; I < Ehdr->EPhNum; I++) {
         const Elf64Phdr *Ph = ElfGetPhdr(Ehdr, I);
         INT Rc = ElfMapSegment(Pml4, Ph, (const UINT8 *)Image, ImageSize);
@@ -232,7 +233,7 @@ INT ElfLoad(const VOID *Image, USIZE ImageSize,
         }
     }
 
-    // Стек
+    // Stack
     UINT64 Sp = ElfSetupStack(Pml4, ArgC, ArgV);
     if (!Sp) {
         PagingDestroyUserAddressSpace(Pml4);
@@ -242,6 +243,10 @@ INT ElfLoad(const VOID *Image, USIZE ImageSize,
     *OutPageTable = Pml4;
     *OutEntry = Entry;
     *OutStackTop = Sp;
+
+    if (OutHeapStart) {
+        *OutHeapStart = MaxVaddr;
+    }
 
     RETURN(SUCCESS);
 }
@@ -254,37 +259,42 @@ INT ElfLoadFromFile(VfsFile *File,
                     UINT64 **OutPageTable,
                     UINT64 *OutEntry,
                     UINT64 *OutStackTop,
+		    UINT64 *OutHeapStart,
                     INT ArgC, const CHAR *ArgV[]) {
 
     if (!File || !OutPageTable || !OutEntry || !OutStackTop)
         RETURN(INCORRECT_VALUE);
 
-    // Читаем ELF header
+    // Reading the ELF header
     Elf64Ehdr Ehdr;
     VfsSeek(File, 0, SEEK_SET);
     UINT32 Rd = 0;
     INT Rc = VfsRead(File, &Ehdr, sizeof(Ehdr), &Rd);
     if (Rc != SUCCESS || Rd != sizeof(Ehdr)) RETURN(IO_ERROR);
 
-    if (!ElfIsValid(&Ehdr, sizeof(Ehdr))) RETURN(INCORRECT_VALUE);
+    UINT64 FileSize = File->FInode ? File->FInode->ISize : 0;
+    if (FileSize == 0) RETURN(IO_ERROR);
+    if (!ElfIsValid(&Ehdr, FileSize)) RETURN(INCORRECT_VALUE);
 
-    // Читаем program headers
+    // Reading program headers
     Elf64Phdr Phdrs[ELF_MAX_PHN];
     UINT64 PhSize = (UINT64)Ehdr.EPhNum * sizeof(Elf64Phdr);
     VfsSeek(File, Ehdr.EPhOff, SEEK_SET);
     Rc = VfsRead(File, Phdrs, (UINT32)PhSize, &Rd);
     if (Rc != SUCCESS || Rd != PhSize) RETURN(IO_ERROR);
 
-    // Проверяем entry
+    // Checking the entry
     UINT64 Entry = Ehdr.EEntry;
     if (Entry < USER_CODE_VADDR || Entry >= USER_STACK_TOP)
         RETURN(INCORRECT_VALUE);
 
-    // Создаём адресное пространство
+    // Creating an address space
     UINT64 *Pml4 = PagingCreateUserAddressSpace();
     if (!Pml4) RETURN(NO_MEMORY);
 
-    // Грузим сегменты
+    UINT64 MaxVaddr = 0;
+
+    // Shipping segments
     for (INT I = 0; I < Ehdr.EPhNum; I++) {
         const Elf64Phdr *Ph = &Phdrs[I];
         if (Ph->PType != PT_LOAD) continue;
@@ -303,11 +313,13 @@ INT ElfLoadFromFile(VfsFile *File,
         UINT64 SegStart = ElfAlignDown(Ph->PVaddr, PAGE_SIZE);
         UINT64 SegEnd   = ElfAlignUp(Ph->PVaddr + Ph->PMemsz, PAGE_SIZE);
 
+        if (SegEnd > MaxVaddr) MaxVaddr = SegEnd;
+
         UINT64 Flags = PTE_USER | PTE_PRESENT;
         if (Ph->PFlags & PF_W) Flags |= PTE_WRITABLE;
         if (!(Ph->PFlags & PF_X)) Flags |= PTE_NO_EXEC;
 
-        // Смещение в файле
+        // Offset in the file
         UINT64 FileOff = Ph->POffset;
 
         for (UINT64 Va = SegStart; Va < SegEnd; Va += PAGE_SIZE) {
@@ -317,7 +329,7 @@ INT ElfLoadFromFile(VfsFile *File,
                 RETURN(NO_MEMORY);
             }
 
-            // Сколько байт скопировать в эту страницу
+            // How many bytes should I copy to this page?
             UINT64 PageStart = Va;
             UINT64 PageEnd   = Va + PAGE_SIZE;
             UINT64 FileStart = Ph->PVaddr;
@@ -331,7 +343,7 @@ INT ElfLoadFromFile(VfsFile *File,
                 UINT64 SrcOff = CopyStart - Ph->PVaddr;
                 UINT64 CopyLen = CopyEnd - CopyStart;
 
-                // Читаем порциями по 4 KB
+                // We read in 4 KB portions
                 VfsSeek(File, FileOff + SrcOff, SEEK_SET);
                 UINT32 Got = 0;
                 Rc = VfsRead(File, Dst + DstOff, (UINT32)CopyLen, &Got);
@@ -343,7 +355,7 @@ INT ElfLoadFromFile(VfsFile *File,
         }
     }
 
-    // Стек
+    // Stack
     UINT64 Sp = ElfSetupStack(Pml4, ArgC, ArgV);
     if (!Sp) {
         PagingDestroyUserAddressSpace(Pml4);
@@ -353,6 +365,10 @@ INT ElfLoadFromFile(VfsFile *File,
     *OutPageTable = Pml4;
     *OutEntry = Entry;
     *OutStackTop = Sp;
+
+    if (OutHeapStart) {
+        *OutHeapStart = MaxVaddr;
+    }
 
     RETURN(SUCCESS);
 }
@@ -369,10 +385,11 @@ INT UserTaskCreateFromElf(const VOID *Image, USIZE ImageSize,
     UINT64 Entry = 0;
     UINT64 Sp = 0;
 
-    INT Rc = ElfLoad(Image, ImageSize, &Pml4, &Entry, &Sp, ArgC, ArgV);
+    UINT64 HeapStart = 0;
+    INT Rc = ElfLoad(Image, ImageSize, &Pml4, &Entry, &Sp, &HeapStart, ArgC, ArgV);
     if (Rc != SUCCESS) return Rc;
 
-    return UserTaskCreateFromPageTable(Pml4, Entry, Sp, Name);
+    return UserTaskCreateFromPageTable(Pml4, Entry, Sp, HeapStart, Name);
 }
 
 INT UserTaskCreateFromElfFile(const CHAR *Path,
@@ -389,8 +406,9 @@ INT UserTaskCreateFromElfFile(const CHAR *Path,
     UINT64 *Pml4 = NULLPTR;
     UINT64 Entry = 0;
     UINT64 Sp = 0;
+    UINT64 HeapStart = 0;
 
-    Rc = ElfLoadFromFile(File, &Pml4, &Entry, &Sp, ArgC, ArgV);
+    Rc = ElfLoadFromFile(File, &Pml4, &Entry, &Sp, &HeapStart, ArgC, ArgV);
     VfsClose(File);
 
     if (Rc != SUCCESS) {
@@ -398,5 +416,5 @@ INT UserTaskCreateFromElfFile(const CHAR *Path,
         return Rc;
     }
 
-    return UserTaskCreateFromPageTable(Pml4, Entry, Sp, Name);
+    return UserTaskCreateFromPageTable(Pml4, Entry, Sp, HeapStart, Name);
 }

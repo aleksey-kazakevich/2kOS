@@ -96,29 +96,29 @@ typedef struct PciDevice {
 
 //==================== UNIFIED FUNCTIONS ====================
 
-//Initialization (works for both PCI and PCIe)
+/ /Initialization (works for both PCI and PCIe)
 VOID PciInit(VOID);
 
-//Read/write configuration
+// Read/write configuration
 UINT32 PciRead(PciDevice *Dev, UINT8 Offset);
 VOID PciWrite(PciDevice *Dev, UINT8 Offset, UINT32 Value);
 
-//Device discovery
+// Device discovery
 INT PciScan(VOID);
 PciDevice* PciFind(UINT16 VendorId, UINT16 DeviceId);
 PciDevice* PciFindClass(UINT8 ClassCode, UINT8 SubClass);
 
-//Device management
+// Device management
 VOID PciEnable(PciDevice *Dev);
 VOID PciEnableBusmaster(PciDevice *Dev);
 INT PciEnableMsi(PciDevice *Dev, UINT8 Vector, UINT32 ApicId);
 INT PciEnableMsiX(PciDevice *Dev, INT NumVectors, UINT8 VectorBase, UINT32 ApicId);
 
-//Information
+// Information
 const CHAR* PciVendorName(UINT16 VendorId);
 const CHAR* PciClassName(UINT8 ClassCode, UINT8 SubClass);
 
-//PCIe specific functions (only work if is_pcie == true)
+// PCIe specific functions (only work if is_pcie == true)
 BOOL PciEIsActive(PciDevice *Dev);
 const CHAR* PciETypeName(PciDevice *Dev);
 UINT8 PciEGetSpeed(PciDevice *Dev);
@@ -132,5 +132,5 @@ UINT32 PciGetCount(VOID);
 
 UINT32 PciRegisterSysDevices(VOID);
 
-// Получить SysDevice* узла PCI bus.
+// Get the SysDevice* of the PCI bus node.
 SysDevice *PciGetSysDevice(VOID);

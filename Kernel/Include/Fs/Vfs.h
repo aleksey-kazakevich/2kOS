@@ -5,7 +5,7 @@
 #include <List.h>
 
 // ============================================================================
-// КОНСТАНТЫ
+// CONSTANTS
 // ============================================================================
 
 // File types
@@ -33,7 +33,7 @@
 #define SEEK_END     2
 
 // ============================================================================
-// СТРУКТУРЫ
+// STRUCTURES
 // ============================================================================
 
 // Forward declarations
@@ -134,7 +134,7 @@ typedef struct {
 } MountEntry;
 
 // ============================================================================
-// ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
+// GLOBAL VARIABLES
 // ============================================================================
 
 EXTERN(VfsInode, *VfsCurrentDir);
@@ -143,7 +143,7 @@ EXTERN(CHAR, VfsCurrentPath[PATH_MAX]);
 EXTERN(CHAR, VfsCurrentDrive[DRIVE_NAME_MAX]);
 
 // ============================================================================
-// ЯДРО VFS
+// VFS CORE
 // ============================================================================
 
 // Initialization
@@ -151,6 +151,9 @@ VOID VfsInit(VOID);
 
 // File system registration
 INT VfsRegisterFs(FileSystem *Fs);
+
+const CHAR *VfsDetectFilesystemAt(Disk *Dev, UINT64 StartLba);
+const CHAR *VfsDetectFilesystem(Disk *Dev);
 
 // Mounting
 INT VfsMount(const CHAR *FsName, Disk *Dev, UINT64 StartLba, UINT64 SectorCount, VfsInode **Root);

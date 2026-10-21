@@ -6,7 +6,7 @@ OBJCOPY := objcopy
 
 # Флаги компилятора
 # !!! ДОБАВЛЕНЫ ФЛАГИ -MMD -MP ДЛЯ АВТОМАТИЧЕСКОЙ ГЕНЕРАЦИИ ЗАВИСИМОСТЕЙ ОТ .h ФАЙЛОВ !!!
-BASE_CFLAGS := -g -mcmodel=kernel -m64 -fno-merge-constants -fno-ident -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-omit-frame-pointer -fno-builtin -ffunction-sections -fdata-sections -IInclude -Oz -ffreestanding -fstack-protector-strong -fcf-protection=full -mno-red-zone -fno-pie -fno-allow-store-data-races -fno-delete-null-pointer-checks -fno-optimize-sibling-calls -fno-common -fno-strict-aliasing -Wno-address-of-packed-member -Wno-unused-parameter -fno-asynchronous-unwind-tables -freorder-blocks-algorithm=stc -fcf-protection=none -mindirect-branch=thunk-extern -fpartial-inlining -MMD -MP
+BASE_CFLAGS := -Wconversion -g -mcmodel=kernel -m64 -fno-merge-constants -fno-ident -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-omit-frame-pointer -fno-builtin -ffunction-sections -fdata-sections -IInclude -Oz -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fcf-protection=full -mno-red-zone -fno-pie -fno-allow-store-data-races -fno-delete-null-pointer-checks -fno-optimize-sibling-calls -fno-common -fno-strict-aliasing -Wno-address-of-packed-member -Wno-unused-parameter -fno-asynchronous-unwind-tables -freorder-blocks-algorithm=stc -mindirect-branch=thunk-extern -fpartial-inlining -MMD -MP
 DEBUG_CFLAGS := -m64 -g -O0 -DDEBUG -fno-lto -fno-omit-frame-pointer -fno-stack-protector -MMD -MP
 
 # Флаги линковки

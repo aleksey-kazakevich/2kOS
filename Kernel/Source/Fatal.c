@@ -11,7 +11,7 @@ STATIC BOOL PanicAlreadyRunning = FALSE;
 // HELPERS
 // ============================================================================
 
-// Печатает 4 регистра в одну строку. Ровные колонки.
+// Prints 4 registers in one line. Smooth columns.
 STATIC VOID PanicReg4(const CHAR *N0, UINT64 V0,
                       const CHAR *N1, UINT64 V1,
                       const CHAR *N2, UINT64 V2,
@@ -94,7 +94,7 @@ STATIC VOID PanicDumpStack(UINTPTR Rip, UINTPTR Rbp) {
         return;
     }
 
-    // Печатаем по 2 адреса в строку
+    // We print 2 addresses per line.
     for (USIZE I = 0; I < Count; I += 2) {
         if (I + 1 < Count) {
             BaseconPrintf(BASECON_TYPE_NORMAL,
@@ -120,18 +120,18 @@ STATIC VOID PanicShow(const CHAR *Title,
     LocalInterruptsDisable();
     BaseconClear();
 
-    // Заголовок — единственная красная строка
+    // The title is the only red line.
     BaseconSetColors(RGB_RED, RGB_BLACK);
     BaseconPrintf(BASECON_TYPE_NORMAL,
         "KERNEL PANIC: %s\n", Title ? Title : "(unknown)");
     BaseconSetColors(RGB_GRAY, RGB_BLACK);
 
-    // Локация — одной строкой
+    // Location — in one line
     BaseconPrintf(BASECON_TYPE_NORMAL,
         "%s:%d  %s\n",
         File ? File : "?", Line, Func ? Func : "?");
 
-    // Регистры
+    // Registers
     if (Frame) {
         PanicDumpRegsFromFrame(Frame);
     } else {
@@ -148,9 +148,9 @@ STATIC VOID PanicShow(const CHAR *Title,
     UINTPTR Rbp = Frame ? Frame->RBP : GetRbp();
     PanicDumpStack(Rip, Rbp);
 
-    // Финал
+    // The final
     BaseconSetColors(RGB_RED, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "HALTED\n");
+    BaseconPrintf(BASECON_TYPE_NORMAL, "\nSYSTEM HALTED\n");
     BaseconSetColors(RGB_GRAY, RGB_BLACK);
 }
 

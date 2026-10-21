@@ -1,9 +1,7 @@
 #pragma once
 
+#include <Types.h>
 #include <Cmd.h>
 
-// Зарегистрировать команду power
 INT CmdPowerRegister(VOID);
-
-// Обработчик команды power
 INT CmdPowerHandler(INT ArgC, const CHAR *ArgV[]);

@@ -1,9 +1,7 @@
 #pragma once
 
+#include <Types.h>
 #include <Cmd.h>
 
-// Зарегистрировать команду mount
 INT CmdMountRegister(VOID);
-
-// Обработчик команды mount
 INT CmdMountHandler(INT ArgC, const CHAR *ArgV[]);

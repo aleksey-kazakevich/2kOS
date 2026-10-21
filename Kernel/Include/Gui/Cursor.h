@@ -16,6 +16,8 @@ VOID MouseCursorHide(VOID);
 VOID MouseCursorToggle(VOID);
 VOID MouseCursorSetColor(FramebufferColor Color);
 VOID MouseCursorSetSize(UINT32 Width, UINT32 Height);
+VOID MouseCursorSetHotSpot(INT32 HotX, INT32 HotY);
+VOID MouseCursorGetHotSpot(INT32 *HotX, INT32 *HotY);
 
 // Mouse handler
 VOID MouseCursorHandler(MouseEvent *Event, VOID *UserData);

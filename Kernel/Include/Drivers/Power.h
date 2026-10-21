@@ -2,11 +2,11 @@
 
 #include <Types.h>
 
-// Выключение системы
+// Shutting down the system
 VOID PowerShutdown(VOID);
 
-// Перезагрузка системы
+// Rebooting the system
 VOID PowerReboot(VOID);
 
-// Проверить, выполняется ли завершение
+// Check if the completion is in progress
 BOOL PowerIsShuttingDown(VOID);

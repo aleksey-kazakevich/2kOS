@@ -1,15 +1,17 @@
 #pragma once
 
 #include <Drivers/Framebuffer.h>
+#include <Scheduler.h>
+#include <SpinLock.h>
 #include <Types.h>
 
-// Input buffer
 #define BASECON_INPUT_BUFFER_SIZE 256
 #define BASECON_HISTORY_SIZE 16
 #define BASECON_SCROLLBACK_SIZE 1024
 #define BASECON_SCROLLBACK_LINE_LEN 256
+#define BASECON_KEY_QUEUE_SIZE 128
+#define BASECON_OUTLINE_BUFFER_SIZE 1024
 
-// Structure for the input line
 typedef struct {
     CHAR Buffer[BASECON_INPUT_BUFFER_SIZE];
     UINT32 Length;
@@ -17,14 +19,12 @@ typedef struct {
     UINT32 ViewStart;
 } BaseconInputLine;
 
-// Structure for command history
 typedef struct {
     CHAR Lines[BASECON_HISTORY_SIZE][BASECON_INPUT_BUFFER_SIZE];
     UINT32 Count;
     UINT32 Current;
 } BaseconHistory;
 
-// Scrollback structure (entire output history)
 typedef struct {
     CHAR Lines[BASECON_SCROLLBACK_SIZE][BASECON_SCROLLBACK_LINE_LEN];
     FramebufferColor Colors[BASECON_SCROLLBACK_SIZE];
@@ -33,7 +33,6 @@ typedef struct {
     UINT32 MaxDisplayLines;
 } BaseconScrollback;
 
-// Terminal structure
 typedef struct {
     Framebuffer *FB;
     UINT32 Width;
@@ -41,23 +40,27 @@ typedef struct {
     FramebufferColor Fg;
     FramebufferColor Bg;
     BOOL Initialized;
-    
-    // Enter
+
     BaseconInputLine Input;
     BaseconHistory History;
     BOOL InputMode;
     CHAR Prompt[64];
-    
-    // Old mode (cursor)
+
     UINT32 CursorX;
     UINT32 CursorY;
     UINT32 ScrollY;
-    
-    // New fields for the "prompt is always below" mode
+
     BaseconScrollback Scrollback;
     BOOL PromptFixed;
     BOOL WaitingForProgram;
     INT WaitingPid;
+
+    // “Current” string storage (formerly STATIC in BaseconPutChar)
+    CHAR OutLineBuffer[BASECON_OUTLINE_BUFFER_SIZE];
+    UINT32 OutLineLen;
+
+    // Protection against simultaneous access to Basecon
+    SpinLock Lock;
 } Basecon;
 
 typedef enum {
@@ -68,12 +71,13 @@ typedef enum {
     BASECON_TYPE_WARNING
 } BaseconMsgType;
 
-// Callback for input
-typedef VOID (*BaseconInputCallback)(const CHAR *Input, VOID *UserData);
+typedef struct {
+    UINT8 ScanCode;
+    CHAR Ascii;
+    BOOL Pressed;
+} BaseconKeyEvent;
 
-// ============================================================================
-// EXISTING FUNCTIONS
-// ============================================================================
+typedef VOID (*BaseconInputCallback)(const CHAR *Input, VOID *UserData);
 
 INT BaseconInit(Framebuffer *FB);
 VOID BaseconClear(VOID);
@@ -83,10 +87,6 @@ VOID BaseconSetColors(FramebufferColor Fg, FramebufferColor Bg);
 Basecon *BaseconGet(VOID);
 VOID BaseconSetEnabled(BOOL Enabled);
 
-// ============================================================================
-// INPUT FUNCTIONS
-// ============================================================================
-
 VOID BaseconSetPrompt(const CHAR *Prompt);
 VOID BaseconInputStart(VOID);
 VOID BaseconInputEnd(VOID);
@@ -95,11 +95,12 @@ VOID BaseconProcessKey(UINT8 ScanCode, CHAR Ascii, BOOL Pressed);
 BOOL BaseconIsInputMode(VOID);
 VOID BaseconSetInputCallback(BaseconInputCallback Callback, VOID *UserData);
 
-// ============================================================================
-// NEW FEATURES
-// ============================================================================
-
 VOID BaseconRedrawFull(VOID);
 VOID BaseconAddToScrollback(const CHAR *Str);
 VOID BaseconCheckProgramStatus(VOID);
 VOID BaseconSetPromptFixed(BOOL Enable);
+
+VOID BaseconStartConsoleThread(VOID); 
+
+BOOL BaseconIsShutdown(VOID);
+VOID BaseconShutdown(BOOL ClearScreen);

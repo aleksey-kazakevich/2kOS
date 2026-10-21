@@ -3,32 +3,32 @@
 #include <Types.h>
 #include <List.h>
 
-// Коллбэк, вызываемый каждый тик таймера
+// A callback function that is called every timer tick.
 typedef VOID (*TimerCallback)(VOID *UserData);
 
-// Структура подписчика
+// Subscriber structure
 typedef struct TimerSubscriber {
-    ListHead Node;              // Для списка
-    TimerCallback Callback;     // Функция-обработчик
-    VOID *UserData;             // Пользовательские данные
-    UINT32 Interval;            // Вызывать каждые N тиков (1 = каждый тик)
-    UINT32 Counter;             // Текущий счетчик (внутренний)
-    BOOL Active;                // Активен ли подписчик
-    CHAR Name[32];              // Имя для отладки
+    ListHead Node;              // For the list
+    TimerCallback Callback;     // Handler function
+    VOID *UserData;             // User data
+    UINT32 Interval;            // Call every N ticks (1 = every tick)
+    UINT32 Counter;             // Current counter (internal)
+    BOOL Active;                // Is the subscriber active?
+    CHAR Name[32];              // Debug name
 } TimerSubscriber;
 
-// Инициализация системы подписчиков
+// Initialization of the subscriber system
 VOID TimerSubscriberInit(VOID);
 
-// Подписаться на таймер
-// Возвращает: SUCCESS, NO_MEMORY, ALREADY_EXISTS
+// Subscribe to the timer
+// Returns: SUCCESS, NO_MEMORY, ALREADY_EXISTS
 INT TimerSubscribe(TimerSubscriber *Sub);
 
-// Отписаться от таймера
+// Unsubscribe from the timer
 INT TimerUnsubscribe(TimerSubscriber *Sub);
 
-// Обработчик таймера (вызывать из TimerHandler)
+// Timer handler (call from TimerHandler)
 VOID TimerSubscriberTick(VOID);
 
-// Получить количество активных подписчиков
+// Get the number of active subscribers.
 UINT32 TimerSubscriberGetCount(VOID);

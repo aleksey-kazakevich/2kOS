@@ -4,7 +4,7 @@
 #include <Return.h>
 #include <SpinLock.h>
 
-// Глобальный список подписчиков
+// Global subscriber list
 STATIC ListHead GSubscriberList;
 STATIC SpinLock GSubscriberLock;
 STATIC UINT32 GSubscriberCount = 0;
@@ -25,7 +25,7 @@ INT TimerSubscribe(TimerSubscriber *Sub) {
     
     SpinLockAcquire(&GSubscriberLock);
     
-    // Проверяем, не подписан ли уже
+    // Check whether it is already subscribed
     ListHead *Pos;
     ListForEach(Pos, &GSubscriberList) {
         TimerSubscriber *Existing = ListEntry(Pos, TimerSubscriber, Node);
@@ -35,14 +35,14 @@ INT TimerSubscribe(TimerSubscriber *Sub) {
         }
     }
     
-    // Инициализируем подписчика
+    // Initialize the subscriber
     Sub->Counter = 0;
     Sub->Active = TRUE;
     if (Sub->Interval == 0) {
-        Sub->Interval = 1;  // По умолчанию каждый тик
+        Sub->Interval = 1;  // By default every tick
     }
     
-    // Добавляем в список
+    // Add to the list
     ListAddTail(&GSubscriberList, &Sub->Node);
     GSubscriberCount++;
     
@@ -90,20 +90,20 @@ VOID TimerSubscriberTick(VOID) {
         TimerSubscriber *Sub = ListEntry(Pos, TimerSubscriber, Node);
         
         if (!Sub->Active) {
-            // Удаляем неактивных
+            // Remove inactive ones
             ListDel(&Sub->Node);
             GSubscriberCount--;
             continue;
         }
         
-        // Увеличиваем счетчик
+        // Increment the counter
         Sub->Counter++;
         
-        // Проверяем, наступил ли интервал
+        // Check whether the interval has been reached
         if (Sub->Counter >= Sub->Interval) {
             Sub->Counter = 0;
             
-            // Вызываем коллбэк (без блокировки, чтобы не было дедлоков)
+            // Call the callback (without the lock to avoid deadlocks)
             SpinLockRelease(&GSubscriberLock);
             
             if (Sub->Callback) {

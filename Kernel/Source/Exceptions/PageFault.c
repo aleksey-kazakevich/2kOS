@@ -1,3 +1,4 @@
+#include <Utils/ExceptionLog.h>
 #include <ExceptionHelper.h>
 #include <Mem/Allocator.h>
 #include <Mem/PhysAlloc.h>
@@ -127,6 +128,10 @@ VOID PageFaultHandler(InterruptFrame *Frame) {
     // We check which mode the exception originated from.
     BOOL FromUser = ExceptionFromUser(Frame);
     Task *Current = GetCurrentTask();
+
+    if (ExceptionFromUser(Frame)) {
+        ExceptionLogPush(EXC_PAGE_FAULT, Frame);
+    }
     
     // === RESTORE ATTEMPT ===
     if (FromUser && Current && Current != &InitTask) {

@@ -32,9 +32,9 @@ PataPrimaryIrq:
     pop rdi
     pop rsi
     pop rbp
-    pop rbx
     pop rdx
     pop rcx
+    pop rbx
     pop rax
 
     iretq

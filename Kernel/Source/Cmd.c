@@ -30,7 +30,7 @@ STATIC INT CmdParseArguments(const CHAR *CmdLine, const CHAR **ArgV, INT MaxArgs
     while (*Pos && ArgC < MaxArgs) {
         if (*Pos == ' ' || *Pos == '\t') {
             if (InArg) {
-                // Завершаем аргумент
+                // Completing the argument
                 USIZE Len = Pos - ArgStart;
                 CHAR *Arg = (CHAR*)MemoryAllocate(Len + 1);
                 if (!Arg) return -1;
@@ -48,7 +48,7 @@ STATIC INT CmdParseArguments(const CHAR *CmdLine, const CHAR **ArgV, INT MaxArgs
         Pos++;
     }
     
-    // Последний аргумент
+    // The last argument
     if (InArg && ArgC < MaxArgs) {
         USIZE Len = Pos - ArgStart;
         CHAR *Arg = (CHAR*)MemoryAllocate(Len + 1);
@@ -133,18 +133,18 @@ INT CmdExecute(const CHAR *CmdLine) {
     if (!GInitialized || !CmdLine) RETURN(NO_OBJECT);
     if (!CmdLine[0]) RETURN(SUCCESS);
     
-    // Копируем строку для парсинга
+    // Copying the string for parsing
     CHAR Buffer[256];
     StrnCpy(Buffer, CmdLine, sizeof(Buffer) - 1);
     Buffer[sizeof(Buffer) - 1] = '\0';
     CmdStripNewline(Buffer);
     
-    // Парсим аргументы
+    // Parsimony arguments
     const CHAR *ArgV[16];
     INT ArgC = CmdParseArguments(Buffer, ArgV, 16);
     if (ArgC <= 0) RETURN(INCORRECT_VALUE);
     
-    // Ищем команду
+    // Looking for a command
     CmdCommand *Cmd = CmdFind(ArgV[0]);
     if (!Cmd) {
         BaseconPrintf(BASECON_TYPE_ERROR, "command not found: %s\n", ArgV[0]);
@@ -152,10 +152,10 @@ INT CmdExecute(const CHAR *CmdLine) {
         RETURN(NOT_FOUND);
     }
     
-    // Выполняем
+    // Executing
     INT Result = Cmd->Handler(ArgC, ArgV);
     
-    // Освобождаем память
+    // Freeing up memory
     CmdFreeArguments(ArgC, ArgV);
     
     return Result;

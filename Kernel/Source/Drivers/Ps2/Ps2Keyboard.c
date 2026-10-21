@@ -1,6 +1,7 @@
 #include <Drivers/Ps2/Ps2Keyboard.h>
 #include <Drivers/Irq/Apic/Ioapic.h>
 #include <Drivers/Irq/Apic/Apic.h>
+#include <Drivers/Ps2/Ps2Mouse.h>
 #include <Drivers/Ps2/Ps2.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
@@ -451,12 +452,21 @@ VOID Ps2HandleScanByte(UINT8 Byte) {
 
 VOID Ps2KeyboardHandleIRQ(VOID) {
     while (Inb(PS2_PORT_STATUS) & PS2_STATUS_OUTPUT_FULL) {
+        UINT8 Status = Inb(PS2_PORT_STATUS);
         UINT8 Byte = Inb(PS2_PORT_DATA);
-        Ps2HandleScanByte(Byte);
+
+        if (Status & PS2_STATUS_AUXB) {
+            // This is a byte from the mouse — we give it to the mouse handler.
+            Ps2MouseHandleByte(Byte);
+        } else {
+            // Our byte
+            Ps2HandleScanByte(Byte);
+        }
     }
-    
+
     ApicEoi();
     Ps2KeyboardDispatchEvents();
+    Ps2MouseDispatchEvents();   // ← suddenly we processed mouse bytes
 }
 
 // ============================================================================
@@ -786,11 +796,11 @@ INT Ps2KeyboardInit(VOID) {
 SysDevice *Ps2KeyboardRegisterSysDevice(VOID) {
     if (!GPs2.Initialized) return NULLPTR;
 
-    // Уже зарегистрирована?
+    // Already registered?
     SysDevice *Existing = SysDeviceFind("KEYBOARD");
     if (Existing) return Existing;
 
-    // Родитель — PS2 bus (из Ps2.c), fallback — root
+    // Parent is PS2 bus (from Ps2.c), fallback is root
     SysDevice *Parent = Ps2GetSysDevice();
     if (!Parent) Parent = SysDeviceGetRoot();
     if (!Parent) return NULLPTR;
@@ -801,16 +811,16 @@ SysDevice *Ps2KeyboardRegisterSysDevice(VOID) {
                                       SYSDEV_TYPE_INPUT);
     if (!Dev) return NULLPTR;
 
-    // --- Ресурсы ---
+    // Resources
 
-    // IRQ клавиатуры (GSI + вектор)
+    // IRQ keyboard (GSI + vector)
     if (GPs2.Gsi) {
         SysDeviceAddResource(Dev, SYSDEV_RES_IRQ, GPs2.Gsi, 1);
         SysDeviceSetPropU32(Dev, "gsi", GPs2.Gsi);
     }
     SysDeviceSetPropU32(Dev, "vector", KEYBOARD);
 
-    // --- Свойства ---
+    // Properties
 
     SysDeviceSetPropU32(Dev, "port", 1);
     SysDeviceSetPropU32(Dev, "layout", (UINT32)GPs2.Layout);
@@ -820,7 +830,7 @@ SysDevice *Ps2KeyboardRegisterSysDevice(VOID) {
     SysDeviceSetPropU64(Dev, "event_count", GPs2.EventCount);
     SysDeviceSetPropU64(Dev, "error_count", GPs2.ErrorCount);
 
-    // --- Привязка к KDriver ---
+    // Linking to KDriver
 
     if (GPs2.Driver) {
         SysDeviceBindDriver(Dev, GPs2.Driver);

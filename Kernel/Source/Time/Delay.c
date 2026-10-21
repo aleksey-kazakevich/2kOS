@@ -13,7 +13,7 @@ STATIC UINT64 TscPerMs = 0;
 #define PIT_CH0  0x40
 #define PIT_CMD  0x43
 
-// Однократный режим (mode 0), 16-битный доступ
+// One-shot mode (mode 0), 16-bit access
 STATIC VOID PitPrepareOneshot(VOID) {
     // Channel 0, lobyte/hibyte, mode 0 (interrupt on terminal count), binary
     Outb(PIT_CMD, 0x30);
@@ -24,7 +24,7 @@ STATIC VOID PitSetCount(UINT16 Count) {
     Outb(PIT_CH0, (UINT8)((Count >> 8) & 0xFF));
 }
 
-// Читает текущее значение счётчика PIT (через latch)
+// Reads the current PIT counter value (via latch)
 STATIC UINT16 PitReadCount(VOID) {
     // Latch channel 0: 0b00000000 → channel 0, latch command
     Outb(PIT_CMD, 0x00);
@@ -33,43 +33,43 @@ STATIC UINT16 PitReadCount(VOID) {
     return (UINT16)(Lo | ((UINT16)Hi << 8));
 }
 
-// Калибровка через PIT: запускаем счётчик на N мс, меряем TSC
+// Calibration via PIT: start the counter for N ms, measure TSC
 STATIC BOOL TscCalibrateWithPit(VOID) {
-    const UINT32 CalMs = 50;                    // 50 мс — достаточно точно
+    const UINT32 CalMs = 50;                    // 50 ms — accurate enough
     const UINT32 PitTicks = (PIT_FREQ * CalMs) / 1000;
 
-    // PIT 16-bit, макс 65535
+    // PIT 16-bit, max 65535
     if (PitTicks == 0 || PitTicks > 0xFFFF) {
         return FALSE;
     }
 
-    // Отключаем динамик / порт B (не критично, но пусть будет)
+    // Disable the speaker / port B (not critical, but let it be)
     UINT8 Port61 = Inb(0x61);
-    Outb(0x61, (Port61 & 0xFC) | 0x01);    // включить таймер 2 гейт
-    Outb(0x61, Port61);                     // восстановить
+    Outb(0x61, (Port61 & 0xFC) | 0x01);    // enable timer 2 gate
+    Outb(0x61, Port61);                     // restore
 
-    // Настраиваем PIT на oneshot
+    // Configure the PIT for one-shot
     PitPrepareOneshot();
     PitSetCount((UINT16)PitTicks);
 
-    // Ждём, пока счётчик не дойдёт до 0
+    // Wait until the counter reaches 0
     UINT64 TscStart = ReadTimeStampCounter();
 
-    // Ждём завершения: читаем счётчик, пока не станет маленьким
-    // PIT счётчик считает ВНИЗ. Мы ждём, пока он не дойдёт до 0.
+    // Wait for completion: read the counter until it becomes small
+    // The PIT counter counts DOWN. We wait until it reaches 0.
     UINT16 Prev = 0xFFFF;
     UINT32 Stall = 0;
     while (1) {
         UINT16 Curr = PitReadCount();
-        if (Curr == 0) break;               // счётчик достиг 0
+        if (Curr == 0) break;               // counter reached 0
 
-        // Если значение вдруг выросло — значит, мы поймали перезагрузку
+        // If the value suddenly increased — we caught a reload
         if (Curr > Prev + 100) break;
 
         Prev = Curr;
 
         if (++Stall > 100000000) {
-            return FALSE;                   // защита от зависания
+            return FALSE;                   // hang protection
         }
     }
 
@@ -77,13 +77,13 @@ STATIC BOOL TscCalibrateWithPit(VOID) {
     UINT64 TscDelta = TscEnd - TscStart;
 
     if (TscDelta < 100000) {
-        return FALSE;                       // слишком мало — что-то не так
+        return FALSE;                       // too small — something is wrong
     }
 
     // TscPerMs = TscDelta / CalMs
     TscPerMs = TscDelta / CalMs;
 
-    // Проверка разумности: от 100 МГц до 10 ГГц
+    // Sanity check: from 100 MHz to 10 GHz
     if (TscPerMs < 100000 || TscPerMs > 10000000) {
         TscPerMs = 0;
         return FALSE;
@@ -93,54 +93,54 @@ STATIC BOOL TscCalibrateWithPit(VOID) {
 }
 
 /* ============================================================================
- * Инициализация (вызывается один раз при старте таймера)
+ * Initialization (called once at timer startup)
  * ============================================================================ */
 
 VOID TimerDelayInit(VOID) {
     if (TscPerMs != 0) return;
 
-    // 1. Попробуем HPET
+    // 1. Try HPET
     if (HpetIsAvailable()) {
-        UINT64 TscFreq = HpetCalibrateTsc();    // возвращает Гц
+        UINT64 TscFreq = HpetCalibrateTsc();    // returns Hz
         if (TscFreq > 0) {
             TscPerMs = TscFreq / 1000;
             return;
         }
     }
 
-    // 2. Fallback на PIT
+    // 2. Fallback to PIT
     if (TscCalibrateWithPit()) {
         return;
     }
 
-    // 3. Совсем крайний случай — но без магических 2 ГГц.
-    //    Оставим TscPerMs = 0 и будем использовать HpetDelayMs
-    //    напрямую, если HPET доступен.
+    // 3. Absolute last resort — but without magic 2 GHz.
+    //    Leave TscPerMs = 0 and use HpetDelayMs
+    //    directly if HPET is available.
     TscPerMs = 0;
 }
 
 /* ============================================================================
- * Задержки
+ * Delays
  * ============================================================================ */
 
 VOID TimerUdelay(UINT32 Us) {
     if (Us == 0) return;
 
-    // Если HPET доступен — используем его (точно и без калибровки)
+    // If HPET is available — use it (accurate and no calibration needed)
     if (HpetIsAvailable()) {
         HpetDelayUs(Us);
         return;
     }
 
-    // Иначе — TSC
+    // Otherwise — TSC
     if (TscPerMs == 0) {
         TimerDelayInit();
     }
 
     if (TscPerMs == 0) {
-        // TSC не откалиброван — грубая задержка через цикл
-        // Оценим скорость: ~1000 итераций на 1 мкс на 2 ГГц.
-        // Это плохо, но лучше, чем ничего.
+        // TSC not calibrated — rough delay via a loop
+        // Estimate the speed: ~1000 iterations per 1 us at 2 GHz.
+        // This is bad, but better than nothing.
         UINT64 Loops = (UINT64)Us * 1000;
         while (Loops--) {
             CpuPause();
@@ -160,13 +160,13 @@ VOID TimerUdelay(UINT32 Us) {
 VOID TimerMdelay(UINT32 Ms) {
     if (Ms == 0) return;
 
-    // Если HPET доступен — используем его
+    // If HPET is available — use it
     if (HpetIsAvailable()) {
         HpetDelayMs(Ms);
         return;
     }
 
-    // Иначе через микросекунды (TSC)
+    // Otherwise via microseconds (TSC)
     while (Ms >= 1000) {
         TimerUdelay(1000 * 1000);
         Ms -= 1000;

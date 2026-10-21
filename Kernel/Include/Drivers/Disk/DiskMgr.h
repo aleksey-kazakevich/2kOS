@@ -28,118 +28,228 @@ typedef enum {
     PARTITION_TYPE_EXTENDED
 } PartitionType;
 
+/* Disk layout scheme */
+typedef enum {
+    DISK_PART_SCHEME_NONE = 0,   /* signature not found */
+    DISK_PART_SCHEME_MBR,
+    DISK_PART_SCHEME_GPT,
+} DiskPartScheme;
+
+typedef enum {
+    DISKCFG_FS_NONE = 0,
+    DISKCFG_FS_FAT32,
+    DISKCFG_FS_EXFAT,
+    DISKCFG_FS_ISO9660,   // read-only, cfg is written to the image during assembly
+} DiskCfgFsKind;
+
 #define DRIVE_NAME_MAX 32
+
+#define DISKCFG_ID_MAX       40
+#define DISKCFG_NAME_MAX     32
+#define DISKCFG_FILE_NAME    "disk.cfg"
+#define DISKCFG_VERSION      1
+
+typedef struct {
+    BOOL   Valid;                        // successfully read/parsed
+    BOOL   Stale;                        // the ID in the file did not match the real one
+    UINT32 Version;                      // version=1
+    CHAR   Id[DISKCFG_ID_MAX];           // persistent id
+    CHAR   Name[DISKCFG_NAME_MAX];       // disk_name
+    BOOL   IsRoot;                       // is_root=0/1
+    DiskCfgFsKind FsKind;                // filled in by the caller
+} DiskCfg;
 
 typedef struct Partition {
     ListHead Node;
-    
-    // --- Name ---
-    CHAR Name[DRIVE_NAME_MAX];  // For example: "IDE0:2"
-    UINT32 Index;               // 1-based for user
-    
-    // --- Physical parameters ---
+
+    /* --- Name --- */
+    CHAR Name[DRIVE_NAME_MAX];      /* "IDE0:2" or "NVME1p1" */
+    CHAR Alias[DRIVE_NAME_MAX];    // alias ("rootfs") from disk.cfg
+    UINT32 Index;                   /* 1-based for the user */
+
+    CHAR   CfgId[DISKCFG_ID_MAX];
+    BOOL   CfgValid;
+    BOOL   CfgStale;
+    BOOL   IsRoot;
+    DiskCfgFsKind CfgFsKind;
+
+    /* --- Physical parameters --- */
     UINT64 StartLba;
     UINT64 SectorCount;
     UINT32 SectorSize;
     UINT64 SizeInBytes;
-    
-    // --- Type ---
-    UINT8 PartitionId;          // 0x07=NTFS, 0x0B=FAT32, 0x83=Linux
+
+    /* --- Type --- */
+    UINT8 PartitionId;              /* MBR ID (synthetic for GPT) */
     PartitionType Type;
-    
-    // --- Flags ---
+
+    /* --- GPT metadata --- */
+    BOOL     IsGpt;
+    CHAR     Label[36];             /* UTF-8 section name (GUID entry Name) */
+    UINT8    TypeGuid[16];          /* the raw GUID of the type */
+    UINT8    UniqueGuid[16];        /* the raw GUID of the instance */
+    UINT64   Attributes;            /* GPT Attributes */
+
+    /* --- Flags --- */
     BOOL Bootable;
     BOOL Mounted;
-    
-    // --- Parent disk ---
+
+    /* --- Parent disk --- */
     struct Disk *ParentDisk;
-    
-    // --- For extended partitions (logical drives) ---
+
+    /* --- Extended partitions (MBR only) --- */
     struct Partition *NextLogical;
     UINT64 ExtendedStartLba;
 } Partition;
 
 typedef struct Disk {
     ListHead Node;
-    
-    // --- Name ---
-    CHAR Name[32];              // "IDE0", "SATA1"
+
+    /* --- Name --- */
+    CHAR Name[32];
+    CHAR Alias[DRIVE_NAME_MAX];
     DiskType Type;
     UINT32 Index;
-    
-    // --- Physical parameters ---
+
+    CHAR   CfgId[DISKCFG_ID_MAX];  // persistent id (hex)
+    BOOL   CfgValid;               // disk.cfg has been read and the id matches
+    BOOL   CfgStale;               // disk.cfg is there, but the id didn't match
+    BOOL   IsRoot;                 // mount at startup
+    DiskCfgFsKind CfgFsKind;       // for reuse
+
+    /* --- Physical parameters --- */
     UINT64 SectorCount;
     UINT32 SectorSize;
     UINT64 TotalSize;
-    
-    // --- Partitions ---
-    ListHead Partitions;        // Primary partitions
+
+    /* --- Partition scheme --- */
+    DiskPartScheme PartScheme;
+    UINT8 DiskGuid[16];             /* GPT DiskGUID (for GPT) */
+
+    /* --- Partitions --- */
+    ListHead Partitions;
     UINT32 PartitionCount;
-    ListHead LogicalPartitions; // Logical partitions
+    ListHead LogicalPartitions;     /* MBR extended only */
     UINT32 LogicalCount;
-    
-    // --- Driver data ---
+
+    /* --- Driver data --- */
     VOID *DriverData;
     BOOL Initialized;
-    
-    // --- Driver functions ---
+
+    /* --- Driver functions --- */
     INT (*Read)(struct Disk *Disk, UINT64 Lba, UINT32 Count, VOID *Buffer);
     INT (*Write)(struct Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buffer);
     INT (*Flush)(struct Disk *Disk);
 } Disk;
 
-// --- Initialization ---
-VOID DiskMgrInit(VOID);
+/* ============================================================================ Initialization ============================================================================ */
 
-// --- Disc registration ---
+VOID DiskMgrInit(VOID);
+VOID DiskMgrInitDisks(VOID);
+VOID DiskCfgInit(VOID);
+
+/* ============================================================================ Disk registration ============================================================================ */
+
 INT DiskMgrRegisterDisk(Disk *Disk);
 INT DiskMgrUnregisterDisk(Disk *Disk);
 
-// --- Search ---
+/* ============================================================================ Search ============================================================================ */
+
 Disk* DiskMgrFindDisk(const CHAR *Name);
 Partition* DiskMgrFindPartition(const CHAR *Name);
 
-// --- Disk list ---
+/* ============================================================================ Disk list ============================================================================ */
+
 UINT32 DiskMgrGetDiskCount(VOID);
 Disk* DiskMgrGetDisk(UINT32 Index);
 Disk* DiskMgrGetFirst(VOID);
 Disk* DiskMgrGetNext(Disk *Prev);
 
-// --- List of sections ---
+/* ============================================================================ Partition list ============================================================================ */
+
 UINT32 DiskMgrGetPartitionCount(Disk *Disk);
 Partition* DiskMgrGetPartition(Disk *Disk, UINT32 Index);
 Partition* DiskMgrGetPartitionByName(Disk *Disk, const CHAR *Name);
 
-// --- Logical partitions ---
 UINT32 DiskMgrGetLogicalCount(Disk *Disk);
 Partition* DiskMgrGetLogical(Disk *Disk, UINT32 Index);
 
-// --- Read/write via partition ---
+/* ============================================================================ Read / write ============================================================================ */
+
 INT PartitionRead(Partition *Part, UINT64 Offset, UINT32 Count, VOID *Buffer);
 INT PartitionWrite(Partition *Part, UINT64 Offset, UINT32 Count, const VOID *Buffer);
 INT PartitionFlush(Partition *Part);
 UINT64 PartitionGetSize(Partition *Part);
 
-// --- Read/write via name ---
 INT DiskMgrRead(const CHAR *Name, UINT64 Lba, UINT32 Count, VOID *Buffer);
 INT DiskMgrWrite(const CHAR *Name, UINT64 Lba, UINT32 Count, const VOID *Buffer);
 
+/* ============================================================================ Partition scan ============================================================================ */
+
+/* Automatically detects GPT or MBR and parses the partitions. */
+INT PartitionScan(Disk *Disk);
+
+/* Analysis of a specific scheme (for explicit invocation). */
 INT PartitionScanMBR(Disk *Disk);
+INT PartitionScanGPT(Disk *Disk);
+
+/* ============================================================================ MBR: create / delete ============================================================================ */
 
 INT PartitionCreateMBR(Disk *Disk, UINT64 StartLba, UINT64 SectorCount, UINT8 PartitionId);
 INT PartitionDeleteMBR(Disk *Disk, UINT32 PartitionIndex);
 
+/* ============================================================================ GPT: create / delete ============================================================================ */
+
+/*
+   Create a GPT partition.
+   Type — PartitionType (or PARTITION_TYPE_UNKNOWN for the default type).
+   Label — UTF-8, up to 35 characters (cut off).
+ */
+INT PartitionCreateGPT(Disk *Disk, UINT64 StartLba, UINT64 SectorCount,
+                       PartitionType Type, const CHAR *Label);
+
+/* Delete the GPT partition by 1-based index (internal Partition->Index). */
+INT PartitionDeleteGPT(Disk *Disk, UINT32 PartitionIndex);
+
+/* Initialize an empty GPT on the disk (creates a protective MBR, GPT Header on LBA 1, entries on LBA 2, backup at the end). */
+INT GptInitDisk(Disk *Disk);
+
+/* ============================================================================ Utility ============================================================================ */
+
 const CHAR* DiskTypeToString(DiskType Type);
 const CHAR* PartitionTypeToString(PartitionType Type);
 const CHAR* PartitionIdToString(UINT8 Id);
+const CHAR* DiskPartSchemeToString(DiskPartScheme Scheme);
 
-// Create disk name
 VOID DiskMakeName(Disk *Disk);
-VOID DiskMgrInitDisks(VOID);
 
-// Регистрация всех дисков (и их разделов) в SysDevice.
+/* ============================================================================ SysDevice ============================================================================ */
+
 UINT32 DiskMgrRegisterSysDevices(VOID);
-
-// Получить SysDevice* корневого узла DRIVE.
-// Возвращает NULLPTR, если регистрация ещё не производилась.
 SysDevice *DiskMgrGetSysDevice(VOID);
+
+/* ============================================================================ DiskCfg ============================================================================ */
+
+/* In-memory parsing/serialization (without I/O) */
+INT  DiskCfgParse(const CHAR *Buf, USIZE Len, DiskCfg *Out);
+INT  DiskCfgSerialize(const DiskCfg *Cfg, CHAR *Buf, USIZE BufSize);
+
+/* Calculating the persistent id for a disk/partition */
+VOID DiskCfgComputeId(Disk *D, UINT64 StartLba, UINT64 SectorCount,
+                      DiskCfgFsKind Fs, char *Out, USIZE OutSize);
+
+/* Read/write disk.cfg from disk (mini-parser, without VFS-mount) */
+INT  DiskCfgReadVolume(Disk *D, UINT64 StartLba, UINT64 SectorCount,
+                       DiskCfgFsKind Fs, DiskCfg *Out);
+INT  DiskCfgWriteVolume(Disk *D, UINT64 StartLba, UINT64 SectorCount,
+                        DiskCfgFsKind Fs, const CHAR *Name, BOOL IsRoot);
+
+/* Apply cfg to disk/partition (id-matching, alias, is_root) */
+INT  DiskCfgApplyToDisk(Disk *D);
+INT  DiskCfgApplyToPartition(Partition *P);
+
+/* Mounting all is_root=1 volumes (call AFTER InitFs) */
+VOID DiskCfgMountRoots(VOID);
+
+/* Utilities */
+BOOL DiskCfgAliasExists(const CHAR *Alias, Disk *SelfD, Partition *SelfP);

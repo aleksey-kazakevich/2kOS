@@ -15,19 +15,14 @@ VOID MemoryInit(VOID) {
 }
 
 VOID InitStackProtector(VOID) {
-    #define IA32_GS_BASE        0xC0000101
-    #define IA32_KERNEL_GS_BASE 0xC0000102
+    UINT64 Seed = ReadTimeStampCounter();
+    Seed ^= ReadCr3();
+    Seed ^= (Seed << 13);
+    Seed ^= (Seed >> 7);
+    Seed ^= (Seed << 17);
+    if (Seed == 0) Seed = 0xDEADC0DEBAADF00DULL;
 
-    struct StackGuardTLS {
-        UINT8 Reserved[40];
-        UINT64 Canary;
-    };
-
-    STATIC struct StackGuardTLS KernelTLS;
-
-    KernelTLS.Canary = 0xDEADC0DEBAADF00DULL;
-    WriteMSR(IA32_GS_BASE, (UINT64)&KernelTLS);
-    WriteMSR(IA32_KERNEL_GS_BASE, (UINT64)&KernelTLS);
+    __stack_chk_guard = Seed;
 }
 
 VOID InitCmds(VOID) {
@@ -45,11 +40,21 @@ VOID InitCmds(VOID) {
     CmdRamDiskRegister();
     CmdSysDevRegister();
     CmdRunRegister();
+    CmdCdRegister();
+    CmdWriteRegister();
+    CmdReadRegister();
+    CmdAsmRegister();
+    CmdELogRegister();
+    CmdSLogRegister();
+    CmdHexDumpRegister();
+    CmdSmpInfoRegister();
 }
 
 VOID InitFs(VOID) {
     VfsInit();
     ExfatInit();
+    Fat32Init();
+    Iso9660Init();
 }
 
 VOID CheckBootFlags(VOID) {
@@ -58,11 +63,13 @@ VOID CheckBootFlags(VOID) {
     } else {
         BaseconSetEnabled(TRUE);
     }
+    if (!CmdLineIsFlagSet("nocom") || !CmdLineIsFlagSet("NOCOM")) {
+        ComInitAll();
+    }
 }
 
 VOID KMain(VOID) {
     InitStackProtector();
-    TssInit();
     KDriverInit();
     MemoryInit();
     SysDeviceInit();
@@ -88,19 +95,26 @@ VOID KMain(VOID) {
     
     if (InitAcpiAndApic() != SUCCESS) Fatal("failed to initialize apic and acpi");
 
-    ComInitAll();
-
     PciInit();
-    
-    InitTimer();
+
+    CpuRegisterAllBackends();
+    CpuInit();
 
     SchedulerInit();
+
+    SmpInit();
+
+    InitTimer();
 
     SyscallInit();
 
     PCacheInit();
 
     LocalInterruptsEnable();
+
+    ExceptionLogInit();
+	
+    BaseconStartConsoleThread();
 
     DiskMgrInit();
     DiskMgrInitDisks();
@@ -116,10 +130,13 @@ VOID KMain(VOID) {
     BaseconSetInputCallback(CmdBaseconHandler, NULLPTR);
     InitCmds();
 
+    BaseconSetPrompt("2KOS> ");
+
+    DiskCfgInit();
+
     BaseconSetEnabled(TRUE);
     BaseconClear();
 
-    BaseconSetPrompt("2KOS> ");
     BaseconSetPromptFixed(TRUE);
     BaseconInputStart();
 

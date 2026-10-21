@@ -1,3 +1,4 @@
+#include <Utils/ExceptionLog.h>
 #include <ExceptionHelper.h>
 #include <Interrupt.h>
 #include <Asm/Cpu.h>
@@ -9,5 +10,8 @@ VOID SimdErrorHandler(InterruptFrame *Frame) {
     /* Reading MXCSR */
     asm volatile("stmxcsr %0" : "=m"(Mxcsr));
     
+    if (ExceptionFromUser(Frame)) {
+        ExceptionLogPush(EXC_SIMD_ERROR, Frame);
+    }
     HANDLE_EXCEPTION(Frame, "simd error");
 }

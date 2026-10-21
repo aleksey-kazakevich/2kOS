@@ -32,12 +32,14 @@
 // Controller status
 // ============================================================================
 
-#define PS2_STATUS_OUTPUT_FULL   (1 << 0)
-#define PS2_STATUS_INPUT_FULL    (1 << 1)
-#define PS2_STATUS_SYSTEM        (1 << 2)
-#define PS2_STATUS_CMD_DATA      (1 << 3)
-#define PS2_STATUS_TIMEOUT       (1 << 4)
-#define PS2_STATUS_PARITY_ERROR  (1 << 5)
+#define PS2_STATUS_OUTPUT_FULL   (1 << 0)   // 0x01 — there is data at 0x60
+#define PS2_STATUS_INPUT_FULL    (1 << 1)   // 0x02 — the controller is busy
+#define PS2_STATUS_SYSTEM        (1 << 2)   // 0x04 — self-test passed
+#define PS2_STATUS_CMD_DATA      (1 << 3)   // 0x08 — the last entry in 0x60 was the command
+#define PS2_STATUS_UNUSED1       (1 << 4)   // 0x10
+#define PS2_STATUS_AUXB          (1 << 5)   // 0x20 — 0 = keyboard, 1 = mouse (AUXB)
+#define PS2_STATUS_TIMEOUT       (1 << 6)   // 0x40
+#define PS2_STATUS_PARITY_ERROR  (1 << 7)   // 0x80
 
 // ============================================================================
 // Controller Configuration (Configuration Byte)

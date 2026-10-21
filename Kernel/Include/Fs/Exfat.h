@@ -121,5 +121,5 @@ typedef struct {
 
 /* Initialization */
 INT ExfatInit(VOID);
-/* Форматирование */
+/* Formatting */
 INT ExfatFormat(Disk *Disk, UINT64 StartLba, UINT64 SectorCount);

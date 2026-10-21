@@ -11,6 +11,18 @@ typedef struct {
     UINT8  Second;
 } DateTime;
 
+typedef struct {
+    UINT64 Ticks;
+    UINT32 Period; 
+    UINT32 TscKhz;
+    UINT32 ApicBusKhz;
+    UINT32 TickHz;
+    UINT32 Divider;
+    UINT32 InitCount;
+    BOOL Calibrated;
+    UINT64 SchedTicks;
+} Timer;
+
 typedef UINT64 UnixTime;
 
 UINT8 BcdToBin(UINT8 Bcd);

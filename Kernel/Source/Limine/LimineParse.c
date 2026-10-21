@@ -244,3 +244,29 @@ struct limine_file *LimineFindModuleByString(const CHAR *String) {
     }
     return NULLPTR;
 }
+
+BOOL LimineMpAvailable(VOID) {
+    return mp_req.response != NULLPTR;
+}
+
+UINT64 LimineMpCpuCount(VOID) {
+    if (!LimineMpAvailable()) return 0;
+    struct limine_mp_response *Resp =
+        (struct limine_mp_response *)mp_req.response;
+    return Resp->cpu_count;
+}
+
+struct limine_mp_info *LimineMpCpu(UINT64 Index) {
+    if (!LimineMpAvailable()) return NULLPTR;
+    struct limine_mp_response *Resp =
+        (struct limine_mp_response *)mp_req.response;
+    if (Index >= Resp->cpu_count) return NULLPTR;
+    return Resp->cpus[Index];
+}
+
+UINT32 LimineMpBspLapicId(VOID) {
+    if (!LimineMpAvailable()) return 0;
+    struct limine_mp_response *Resp =
+        (struct limine_mp_response *)mp_req.response;
+    return Resp->bsp_lapic_id;
+}

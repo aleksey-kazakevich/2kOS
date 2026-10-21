@@ -1,26 +1,28 @@
-#include <Mem/LowMem.h>
 #include <Limine/LimineParse.h>
 #include <Limine/limine.h>
 #include <Mem/Paging.h>
 #include <Lib/String.h>
+#include <Mem/LowMem.h>
+#include <SpinLock.h>
 #include <Basecon.h>
 #include <Return.h>
 
 #define LOWMEM_PAGE_SIZE    4096
-#define LOWMEM_ALIGN_PAGES  (LOWMEM_ALIGN / LOWMEM_PAGE_SIZE)   // 16
+#define LOWMEM_ALIGN_PAGES  (LOWMEM_ALIGN / LOWMEM_PAGE_SIZE)
 
 typedef struct {
     BOOL   Initialized;
-    UINT64 PhysBase;        // физический адрес начала региона
-    UINT64 VirtBase;        // HHDM виртуальный адрес
+    UINT64 PhysBase;
+    UINT64 VirtBase;
     UINT32 TotalPages;
-    UINT32 UsedPages;       // bump pointer
+    UINT32 UsedPages;
+    SpinLock Lock;
 } LowMemState;
 
 STATIC LowMemState GLowMem = {0};
 
 // ============================================================================
-// Поиск свободного региона ниже 16 MB
+// Search for a free region below 16 MB
 // ============================================================================
 
 STATIC UINT64 LowMemFindRegion(struct limine_memmap_entry **Entries,
@@ -28,7 +30,6 @@ STATIC UINT64 LowMemFindRegion(struct limine_memmap_entry **Entries,
     UINT32 NeedPages = LOWMEM_SIZE / LOWMEM_PAGE_SIZE;
     UINT64 BestPhys = 0;
 
-    // Ищем в USABLE регионах ниже 16 MB
     for (UINT64 I = 0; I < EntryCount; I++) {
         struct limine_memmap_entry *E = Entries[I];
         if (E->type != LIMINE_MEMMAP_USABLE) continue;
@@ -36,18 +37,13 @@ STATIC UINT64 LowMemFindRegion(struct limine_memmap_entry **Entries,
         UINT64 Start = E->base;
         UINT64 End   = E->base + E->length;
 
-        // Обрезаем до 16 MB
         if (End > LOWMEM_MAX_ADDR) End = LOWMEM_MAX_ADDR;
         if (Start >= End) continue;
 
-        // Выравниваем начало на 64 KB вверх
         Start = (Start + LOWMEM_ALIGN - 1) & ~(LOWMEM_ALIGN - 1);
 
-        // Проверяем, влезает ли NeedPages подряд с выравниванием
         if (Start + (UINT64)NeedPages * LOWMEM_PAGE_SIZE > End) continue;
 
-        // Берём первый подходящий
-        // (можно было бы искать самый большой, но для 256 KB хватит любого)
         BestPhys = Start;
         break;
     }
@@ -88,13 +84,14 @@ VOID LowMemInit(VOID) {
         return;
     }
 
+    SpinLockInit(&GLowMem.Lock);
+
     GLowMem.Initialized = TRUE;
     GLowMem.PhysBase    = Phys;
     GLowMem.VirtBase    = Phys + Hhdm;
     GLowMem.TotalPages  = LOWMEM_SIZE / LOWMEM_PAGE_SIZE;
     GLowMem.UsedPages   = 0;
 
-    // Обнуляем
     MemSet((VOID *)GLowMem.VirtBase, 0, LOWMEM_SIZE);
 
     BaseconPrintf(BASECON_TYPE_NORMAL,
@@ -111,10 +108,12 @@ VOID* LowMemAllocate(UINT32 PageCount) {
     if (!GLowMem.Initialized) return NULLPTR;
     if (PageCount == 0) return NULLPTR;
 
-    // Округляем до 64 KB
     UINT32 Rounded = (PageCount + LOWMEM_ALIGN_PAGES - 1) & ~(LOWMEM_ALIGN_PAGES - 1);
 
+    UINTPTR Flags = SpinLockAcquireIrq(&GLowMem.Lock);
+
     if (GLowMem.UsedPages + Rounded > GLowMem.TotalPages) {
+        SpinLockReleaseIrq(&GLowMem.Lock, Flags);
         return NULLPTR;
     }
 
@@ -123,7 +122,9 @@ VOID* LowMemAllocate(UINT32 PageCount) {
 
     GLowMem.UsedPages += Rounded;
 
-    // Уже обнулено при init, но на всякий случай
+    SpinLockReleaseIrq(&GLowMem.Lock, Flags);
+
+    // Zeroing out of the lock
     MemSet(Virt, 0, (UINT64)Rounded * LOWMEM_PAGE_SIZE);
 
     return Virt;
@@ -132,7 +133,7 @@ VOID* LowMemAllocate(UINT32 PageCount) {
 VOID LowMemFree(VOID *Addr, UINT32 PageCount) {
     (VOID)Addr;
     (VOID)PageCount;
-    // Bump-аллокатор — не освобождает
+    // Bump allocator — does not release
 }
 
 UINT64 LowMemPhys(VOID *VirtAddr) {

@@ -24,6 +24,18 @@ STATIC BOOL SimdAvailable = FALSE;
 STATIC BOOL AvxAvailable = FALSE;
 STATIC BOOL Avx2Available = FALSE;
 
+STATIC INLINE UINTPTR FramebufferLockAcquire(VOID) {
+    UINTPTR Flags = SaveFlags();
+    LocalInterruptsDisable();
+    SpinLockAcquire(&GFramebuffer.Lock);
+    return Flags;
+}
+
+STATIC INLINE VOID FramebufferLockRelease(UINTPTR Flags) {
+    SpinLockRelease(&GFramebuffer.Lock);
+    RestoreFlags(Flags);
+}
+
 // ============================================================================
 // Checking CPU features
 // ============================================================================
@@ -247,14 +259,17 @@ STATIC INT FramebufferAllocateLayer(INT LayerIndex) {
 
 INT FramebufferCreateLayer(INT LayerIndex) {
     if (!GFramebuffer.Initialized) return -1;
-    if (LayerIndex == 0) return -1; // Layer 0 already exists
-    return FramebufferAllocateLayer(LayerIndex);
+    if (LayerIndex == 0) return -1;
+    UINTPTR Flags = FramebufferLockAcquire();
+    INT R = FramebufferAllocateLayer(LayerIndex);
+    FramebufferLockRelease(Flags);
+    return R;
 }
 
 INT FramebufferDeleteLayer(INT LayerIndex) {
     if (LayerIndex < 0 || LayerIndex >= (INT)GFramebuffer.LayerCount) return -1;
     if (LayerIndex == 0) return -1;
-    
+    UINTPTR Flags = FramebufferLockAcquire();
     FramebufferLayer *Layer = &GFramebuffer.Layers[LayerIndex];
     if (Layer->Buffer) {
         MemoryFree(Layer->Buffer);
@@ -262,20 +277,24 @@ INT FramebufferDeleteLayer(INT LayerIndex) {
     }
     Layer->Enabled = FALSE;
     Layer->IsCursorLayer = FALSE;
-    
+    FramebufferLockRelease(Flags);
     return 0;
 }
 
 INT FramebufferEnableLayer(INT LayerIndex) {
     if (LayerIndex < 0 || LayerIndex >= (INT)GFramebuffer.LayerCount) return -1;
+    UINTPTR Flags = FramebufferLockAcquire();
     GFramebuffer.Layers[LayerIndex].Enabled = TRUE;
+    FramebufferLockRelease(Flags);
     return 0;
 }
 
 INT FramebufferDisableLayer(INT LayerIndex) {
     if (LayerIndex < 0 || LayerIndex >= (INT)GFramebuffer.LayerCount) return -1;
     if (LayerIndex == 0) return -1;
+    UINTPTR Flags = FramebufferLockAcquire();
     GFramebuffer.Layers[LayerIndex].Enabled = FALSE;
+    FramebufferLockRelease(Flags);
     return 0;
 }
 
@@ -293,86 +312,97 @@ INT FramebufferInitCursorLayer(VOID) {
     return 0;
 }
 
-VOID FramebufferSetCursorPosition(INT32 X, INT32 Y) {
+VOID FramebufferDrawCursor(INT32 X, INT32 Y, UINT32 W, UINT32 H,
+                           INT32 PrevX, INT32 PrevY,
+                           UINT32 PrevW, UINT32 PrevH, BOOL PrevValid,
+                           const UINT32 *CursorBuffer) {
     if (CURSOR_LAYER_INDEX >= (INT)GFramebuffer.LayerCount) return;
-    if (!GFramebuffer.Layers[CURSOR_LAYER_INDEX].Enabled) return;
-    
-    FramebufferLayer *Layer = &GFramebuffer.Layers[CURSOR_LAYER_INDEX];
-    Layer->CursorX = X;
-    Layer->CursorY = Y;
-}
 
-VOID FramebufferSetCursorSize(UINT32 W, UINT32 H) {
-    if (CURSOR_LAYER_INDEX >= (INT)GFramebuffer.LayerCount) return;
-    
-    FramebufferLayer *Layer = &GFramebuffer.Layers[CURSOR_LAYER_INDEX];
-    Layer->CursorW = W;
-    Layer->CursorH = H;
-}
+    UINTPTR Flags = FramebufferLockAcquire();
 
-VOID FramebufferDrawCursor(UINT32 *CursorBuffer, UINT32 W, UINT32 H) {
-    if (CURSOR_LAYER_INDEX >= (INT)GFramebuffer.LayerCount) return;
-    
     FramebufferLayer *Layer = &GFramebuffer.Layers[CURSOR_LAYER_INDEX];
-    if (!Layer->Enabled || !Layer->Buffer) return;
-    
+    if (!Layer->Enabled || !Layer->Buffer) {
+        FramebufferLockRelease(Flags);
+        return;
+    }
+
     UINT32 *Dst = (UINT32*)Layer->Buffer;
-    UINT32 Width = GFramebuffer.Width;
-    UINT32 Height = GFramebuffer.Height;
-    
-    INT32 OldX = Layer->CursorX;
-    INT32 OldY = Layer->CursorY;
-    UINT32 OldW = Layer->CursorW;
-    UINT32 OldH = Layer->CursorH;
-    
-    if (OldW == 0) OldW = 32;
-    if (OldH == 0) OldH = 32;
-    
-    // Clearing the old cursor position
-    for (UINT32 Y = 0; Y < OldH && (OldY + Y) < Height; Y++) {
-        for (UINT32 X = 0; X < OldW && (OldX + X) < Width; X++) {
-            if (OldY + Y >= 0 && OldX + X >= 0) {
-                Dst[(OldY + Y) * Width + (OldX + X)] = 0;
+    INT32 Width  = (INT32)GFramebuffer.Width;
+    INT32 Height = (INT32)GFramebuffer.Height;
+
+    // -----------------------------------------------------------------
+    // 1. Clear previous rectangle (with clipping)
+    // -----------------------------------------------------------------
+    if (PrevValid && PrevW > 0 && PrevH > 0) {
+        INT32 PX0 = PrevX;
+        INT32 PY0 = PrevY;
+        INT32 PX1 = PrevX + (INT32)PrevW;
+        INT32 PY1 = PrevY + (INT32)PrevH;
+
+        if (PX0 < 0) PX0 = 0;
+        if (PY0 < 0) PY0 = 0;
+        if (PX1 > Width)  PX1 = Width;
+        if (PY1 > Height) PY1 = Height;
+
+        for (INT32 Row = PY0; Row < PY1; Row++) {
+            UINT32 *RowPtr = Dst + Row * Width;
+            for (INT32 Col = PX0; Col < PX1; Col++) {
+                RowPtr[Col] = 0;
             }
         }
     }
-    
-    // Drawing a new cursor
-    INT32 CX = Layer->CursorX;
-    INT32 CY = Layer->CursorY;
-    UINT32 CW = Layer->CursorW;
-    UINT32 CH = Layer->CursorH;
-    
-    if (CW == 0) CW = 32;
-    if (CH == 0) CH = 32;
-    
-    if (CX < 0 || CY < 0) return;
-    if (CX + CW > Width) CW = Width - CX;
-    if (CY + CH > Height) CH = Height - CY;
-    
-    for (UINT32 Y = 0; Y < CH; Y++) {
-        for (UINT32 X = 0; X < CW; X++) {
-            UINT32 Pixel = CursorBuffer[Y * W + X];
+
+    // -----------------------------------------------------------------
+    // 2. Draw new cursor (with clipping), if any
+    // -----------------------------------------------------------------
+    if (!CursorBuffer || W == 0 || H == 0) {
+        FramebufferLockRelease(Flags);
+        return;
+    }
+
+    INT32 DstX0 = X, DstY0 = Y;
+    INT32 DrawW = (INT32)W, DrawH = (INT32)H;
+    INT32 SrcX0 = 0, SrcY0 = 0;
+
+    if (DstX0 < 0) { SrcX0 = -DstX0; DrawW -= SrcX0; DstX0 = 0; }
+    if (DstY0 < 0) { SrcY0 = -DstY0; DrawH -= SrcY0; DstY0 = 0; }
+    if (DstX0 + DrawW > Width)  DrawW = Width  - DstX0;
+    if (DstY0 + DrawH > Height) DrawH = Height - DstY0;
+
+    if (DrawW <= 0 || DrawH <= 0) {
+        FramebufferLockRelease(Flags);
+        return;
+    }
+
+    for (INT32 Row = 0; Row < DrawH; Row++) {
+        UINT32 *DstRow = Dst + (DstY0 + Row) * Width + DstX0;
+        const UINT32 *SrcRow = CursorBuffer + (SrcY0 + Row) * (INT32)W + SrcX0;
+        for (INT32 Col = 0; Col < DrawW; Col++) {
+            UINT32 Pixel = SrcRow[Col];
             if (Pixel != 0) {
-                Dst[(CY + Y) * Width + (CX + X)] = Pixel;
+                DstRow[Col] = Pixel;
             }
         }
     }
+
+    FramebufferLockRelease(Flags);
 }
 
 // ============================================================================
 // DRAWING IN LAYERS
 // ============================================================================
 
-VOID PutPixelRawLayer(INT Layer, INT32 X, INT32 Y, UINT32 Pixel) {
+VOID PutPixelRawLayerLocked(INT Layer, INT32 X, INT32 Y, UINT32 Pixel) {
     if (Layer < 0 || Layer >= (INT)GFramebuffer.LayerCount) return;
     if (!GFramebuffer.Layers[Layer].Enabled) return;
-    if (X < 0 || X >= (INT)GFramebuffer.Width || Y < 0 || Y >= (INT)GFramebuffer.Height) return;
-    
+    if (X < 0 || X >= (INT)GFramebuffer.Width ||
+        Y < 0 || Y >= (INT)GFramebuffer.Height) return;
+
     VOID *Buffer = GFramebuffer.Layers[Layer].Buffer;
     if (!Buffer) return;
-    
-    UINT8 *Ptr = (UINT8*)Buffer + Y * GFramebuffer.Pitch + X * GFramebuffer.BytesPerPixel;
+
+    UINT8 *Ptr = (UINT8*)Buffer + Y * GFramebuffer.Pitch +
+                 X * GFramebuffer.BytesPerPixel;
     if (GFramebuffer.BytesPerPixel == 4) {
         *(UINT32*)Ptr = Pixel;
     } else if (GFramebuffer.BytesPerPixel == 3) {
@@ -382,6 +412,12 @@ VOID PutPixelRawLayer(INT Layer, INT32 X, INT32 Y, UINT32 Pixel) {
     } else if (GFramebuffer.BytesPerPixel == 2) {
         *(UINT16*)Ptr = (UINT16)Pixel;
     }
+}
+
+VOID PutPixelRawLayer(INT Layer, INT32 X, INT32 Y, UINT32 Pixel) {
+    UINTPTR Flags = FramebufferLockAcquire();
+    PutPixelRawLayerLocked(Layer, X, Y, Pixel);
+    FramebufferLockRelease(Flags);
 }
 
 VOID PutPixelRaw(INT32 X, INT32 Y, UINT32 Pixel) {
@@ -420,14 +456,16 @@ FramebufferColor FramebufferGetPixel(INT32 X, INT32 Y) {
 // FILLING RECTANGLES
 // ============================================================================
 
-VOID FramebufferFillRectLayer(INT Layer, INT32 X, INT32 Y, UINT32 W, UINT32 H, FramebufferColor Color) {
+VOID FramebufferFillRectLayerLocked(INT Layer, INT32 X, INT32 Y, UINT32 W, UINT32 H, FramebufferColor Color) {
     if (Layer < 0 || Layer >= (INT)GFramebuffer.LayerCount) return;
     if (!GFramebuffer.Layers[Layer].Enabled) return;
     if (!ClipCoordFast(&X, &Y, &W, &H)) return;
     
     UINT32 Pixel = ColorToPixel(Color);
     VOID *Buffer = GFramebuffer.Layers[Layer].Buffer;
-    if (!Buffer) return;
+    if (!Buffer) {
+	  return;
+    }
     
     UINT8 *DstBase = (UINT8*)Buffer;
     UINT8 BytesPerPixel = GFramebuffer.BytesPerPixel;
@@ -502,6 +540,13 @@ VOID FramebufferFillRectLayer(INT Layer, INT32 X, INT32 Y, UINT32 W, UINT32 H, F
     }
 }
 
+VOID FramebufferFillRectLayer(INT Layer, INT32 X, INT32 Y,
+                               UINT32 W, UINT32 H, FramebufferColor Color) {
+    UINTPTR Flags = FramebufferLockAcquire();
+    FramebufferFillRectLayerLocked(Layer, X, Y, W, H, Color);
+    FramebufferLockRelease(Flags);
+}
+
 VOID FramebufferFillRect(INT32 X, INT32 Y, UINT32 W, UINT32 H, FramebufferColor Color) {
     return FramebufferFillRectLayer(0, X, Y, W, H, Color);
 }
@@ -510,11 +555,18 @@ VOID FramebufferFillRect(INT32 X, INT32 Y, UINT32 W, UINT32 H, FramebufferColor 
 // CLEAN UP
 // ============================================================================
 
-VOID FramebufferClearLayer(INT Layer, FramebufferColor Color) {
+STATIC VOID FramebufferClearLayerLocked(INT Layer, FramebufferColor Color) {
     if (Layer < 0 || Layer >= (INT)GFramebuffer.LayerCount) return;
     if (!GFramebuffer.Layers[Layer].Enabled) return;
-    
-    FramebufferFillRectLayer(Layer, 0, 0, GFramebuffer.Width, GFramebuffer.Height, Color);
+    FramebufferFillRectLayerLocked(Layer, 0, 0,
+                                    GFramebuffer.Width,
+                                    GFramebuffer.Height, Color);
+}
+
+VOID FramebufferClearLayer(INT Layer, FramebufferColor Color) {
+    UINTPTR Flags = FramebufferLockAcquire();
+    FramebufferClearLayerLocked(Layer, Color);
+    FramebufferLockRelease(Flags);
 }
 
 VOID FramebufferClear(FramebufferColor Color) {
@@ -531,6 +583,8 @@ VOID FramebufferClearBack(VOID) {
 
 VOID FramebufferSwapBuffers(VOID) {
     if (!GFramebuffer.Initialized) return;
+
+    UINTPTR Flags = FramebufferLockAcquire();
     
     UINT32 Width = GFramebuffer.Width;
     UINT32 Height = GFramebuffer.Height;
@@ -563,38 +617,23 @@ VOID FramebufferSwapBuffers(VOID) {
     }
     
     if (CURSOR_LAYER_INDEX < (INT)GFramebuffer.LayerCount) {
-        FramebufferLayer *CursorLayer = &GFramebuffer.Layers[CURSOR_LAYER_INDEX];
-        if (CursorLayer->Enabled && CursorLayer->Buffer && CursorLayer->IsCursorLayer) {
-        
-        UINT32 *Cursor = (UINT32*)CursorLayer->Buffer;
-        UINT32 CursorW = CursorLayer->CursorW;
-        UINT32 CursorH = CursorLayer->CursorH;
-        INT32 CX = CursorLayer->CursorX;
-        INT32 CY = CursorLayer->CursorY;
-        
-            if (CursorW == 0) CursorW = 16;
-            if (CursorH == 0) CursorH = 16;
-        
-            // Clipping
-            if (CX < 0) { CursorW += CX; CX = 0; }
-            if (CY < 0) { CursorH += CY; CY = 0; }
-            if (CX + CursorW > Width) CursorW = Width - CX;
-            if (CY + CursorH > Height) CursorH = Height - CY;
-        
-            if (CursorW == 0 || CursorH == 0) return;
-        
-            // MAIN CHANGE: read from the layer with the Width step!
-            for (UINT32 Y = 0; Y < CursorH; Y++) {
-                UINT32 SrcOffset = (CY + Y) * Width + CX;  // ← step Width!
-                for (UINT32 X = 0; X < CursorW; X++) {
-                    UINT32 Pixel = Cursor[SrcOffset + X];
+    	FramebufferLayer *CursorLayer = &GFramebuffer.Layers[CURSOR_LAYER_INDEX];
+    	if (CursorLayer->Enabled && CursorLayer->Buffer && CursorLayer->IsCursorLayer) {
+            UINT32 *Cursor = (UINT32*)CursorLayer->Buffer;
+            for (UINT32 Y = 0; Y < Height; Y++) {
+            	UINT32 *DstRow = Dst + Y * Width;
+            	UINT32 *SrcRow = Cursor + Y * Width;
+            	for (UINT32 X = 0; X < Width; X++) {
+                    UINT32 Pixel = SrcRow[X];
                     if (Pixel != 0) {
-                        Dst[SrcOffset + X] = Pixel;
+                    	DstRow[X] = Pixel;
                     }
-                }
+            	}
             }
-        }
+    	}
     }
+
+    FramebufferLockRelease(Flags);
 }
 
 INT FramebufferInit(UINT64 PhysAddr, UINT32 Width, UINT32 Height, UINT32 Pitch, UINT8 BytesPerPixel) {
@@ -621,6 +660,8 @@ INT FramebufferInit(UINT64 PhysAddr, UINT32 Width, UINT32 Height, UINT32 Pitch, 
     
     GFramebuffer.ClipEnabled = FALSE;
     GFramebuffer.LayerCount = 0;
+
+    SpinLockInit(&GFramebuffer.Lock);
     
     // CREATE LAYER 0 (main)
     INT Result = FramebufferAllocateLayer(0);
@@ -662,23 +703,31 @@ UINT8 FramebufferGetBpp(VOID) {
 }
 
 VOID FramebufferSetClip(INT32 X1, INT32 Y1, INT32 X2, INT32 Y2) {
+    UINTPTR Flags = FramebufferLockAcquire();
     GFramebuffer.ClipX1 = (X1 < 0) ? 0 : X1;
     GFramebuffer.ClipY1 = (Y1 < 0) ? 0 : Y1;
-    GFramebuffer.ClipX2 = (X2 >= (INT32)GFramebuffer.Width) ? (INT32)GFramebuffer.Width : X2;
-    GFramebuffer.ClipY2 = (Y2 >= (INT32)GFramebuffer.Height) ? (INT32)GFramebuffer.Height : Y2;
+    GFramebuffer.ClipX2 = (X2 >= (INT32)GFramebuffer.Width)
+                          ? (INT32)GFramebuffer.Width : X2;
+    GFramebuffer.ClipY2 = (Y2 >= (INT32)GFramebuffer.Height)
+                          ? (INT32)GFramebuffer.Height : Y2;
     GFramebuffer.ClipEnabled = TRUE;
+    FramebufferLockRelease(Flags);
 }
 
 VOID FramebufferResetClip(VOID) {
+    UINTPTR Flags = FramebufferLockAcquire();
     GFramebuffer.ClipX1 = 0;
     GFramebuffer.ClipY1 = 0;
     GFramebuffer.ClipX2 = GFramebuffer.Width;
     GFramebuffer.ClipY2 = GFramebuffer.Height;
     GFramebuffer.ClipEnabled = FALSE;
+    FramebufferLockRelease(Flags);
 }
 
 VOID FramebufferDisableClip(VOID) {
+    UINTPTR Flags = FramebufferLockAcquire();
     GFramebuffer.ClipEnabled = FALSE;
+    FramebufferLockRelease(Flags);
 }
 
 VOID Swap(INT32 *A, INT32 *B) {
@@ -857,7 +906,7 @@ SysDevice *FramebufferRegisterSysDevice(VOID) {
         return NULLPTR;
     }
 
-    // Проверяем, не зарегистрирован ли уже
+    // Checking if you are already registered.
     SysDevice *Existing = SysDeviceFind("DISPLAY");
     if (Existing) return Existing;
 
@@ -870,14 +919,14 @@ SysDevice *FramebufferRegisterSysDevice(VOID) {
                                           SYSDEV_TYPE_DISPLAY);
     if (!Display) return NULLPTR;
 
-    // --- Ресурсы ---
+    // Resources
 
-    // Физический MMIO регион framebuffer
+    // Physical MMIO region of framebuffer
     UINT64 FbSize = (UINT64)GFramebuffer.Pitch * GFramebuffer.Height;
     SysDeviceAddResource(Display, SYSDEV_RES_MMIO,
                          GFramebuffer.PhysAddr, FbSize);
 
-    // --- Свойства ---
+    // Properties
 
     SysDeviceSetPropU32(Display, "width",  GFramebuffer.Width);
     SysDeviceSetPropU32(Display, "height", GFramebuffer.Height);
@@ -893,7 +942,7 @@ SysDevice *FramebufferRegisterSysDevice(VOID) {
     SysDeviceSetPropU32(Display, "layers", GFramebuffer.LayerCount);
     SysDeviceSetPropU64(Display, "size_bytes", FbSize);
 
-    // --- Привязка к KDriver ---
+    // --- Linking to KDriver ---
 
     KDriver *Drv = KDriverFindByName("Framebuffer");
     if (Drv) {

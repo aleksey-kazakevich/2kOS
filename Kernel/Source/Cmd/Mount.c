@@ -32,7 +32,7 @@ INT CmdMountHandler(INT ArgC, const CHAR *ArgV[]) {
     INT Result;
     CHAR MountedList[256];
 
-    // Нет аргументов — показать список
+    // No arguments — show a list
     if (ArgC < 2) {
         if (VfsListMountedDrives(MountedList, sizeof(MountedList)) > 0) {
             BaseconPrintf(BASECON_TYPE_NORMAL, "\nMounted drives:\n  %s\n\n", MountedList);
@@ -46,9 +46,9 @@ INT CmdMountHandler(INT ArgC, const CHAR *ArgV[]) {
     Name = ArgV[1];
     FsType = (ArgC >= 3) ? ArgV[2] : NULLPTR;
 
-    // ─── Определяем: диск или раздел? ───
+    // Defining: disk or partition?
     if (StrChr(Name, ':')) {
-        // Раздел
+        // Partition
         Partition *Part = DiskMgrFindPartition(Name);
         if (!Part) {
             BaseconPrintf(BASECON_TYPE_ERROR, "Partition not found: %s\n", Name);
@@ -60,7 +60,7 @@ INT CmdMountHandler(INT ArgC, const CHAR *ArgV[]) {
         BaseconPrintf(BASECON_TYPE_NORMAL, "Partition %s: start LBA %llu, %llu sectors\n",
                       Part->Name, StartLba, SectorCount);
     } else {
-        // Целый диск
+        // The whole disk
         D = DiskMgrFindDisk(Name);
         if (!D) {
             BaseconPrintf(BASECON_TYPE_ERROR, "Disk not found: %s\n", Name);
@@ -77,7 +77,7 @@ INT CmdMountHandler(INT ArgC, const CHAR *ArgV[]) {
         SectorCount = D->SectorCount;
     }
 
-    // Проверка на уже смонтированный (по имени)
+    // Checking for an already mounted one (by name)
     CHAR CheckPath[80];
     SnPrintf(CheckPath, sizeof(CheckPath), "%s::/", Name);
     VfsInode *CheckRoot;
@@ -87,7 +87,7 @@ INT CmdMountHandler(INT ArgC, const CHAR *ArgV[]) {
         return -1;
     }
 
-    // ─── Монтируем ───
+    // Mounting
     BaseconPrintf(BASECON_TYPE_NORMAL, "Mounting %s...\n", Name);
 
     Result = VfsMount(FsType, D, StartLba, SectorCount, &Root);

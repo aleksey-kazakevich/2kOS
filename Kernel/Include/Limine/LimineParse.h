@@ -13,6 +13,7 @@ extern struct limine_firmware_type_request firmware_req;
 extern struct limine_rsdp_request rsdp_req;
 extern struct limine_executable_cmdline_request cmdline_req;
 extern struct limine_module_request module_req;
+extern struct limine_mp_request mp_req;
 
 // Framebuffer
 BOOL LimineFramebufferAvailable(VOID);
@@ -48,3 +49,8 @@ UINT64 LimineGetModuleCount(VOID);
 struct limine_file *LimineGetModule(UINT64 Index);
 struct limine_file *LimineFindModuleByPath(const CHAR *Substring);
 struct limine_file *LimineFindModuleByString(const CHAR *String);
+
+BOOL LimineMpAvailable(VOID);
+UINT64 LimineMpCpuCount(VOID);
+struct limine_mp_info *LimineMpCpu(UINT64 Index);
+UINT32 LimineMpBspLapicId(VOID); 

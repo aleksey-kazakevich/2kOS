@@ -1,3 +1,4 @@
+#include <Drivers/Disk/DiskMgr.h>
 #include <Mem/Allocator.h>
 #include <Lib/String.h>
 #include <Scheduler.h>
@@ -886,7 +887,7 @@ STATIC INT ExfatTruncate(VfsInode *Inode, UINT64 NewSize) {
     UINT32 LastCluster = 0;
 
     if (NewSize == 0) {
-        // Освобождаем все кластеры
+        // Freeing up all clusters
         Temp = Cluster;
         while (Temp >= 2 && Temp != EXFAT_FAT_END) {
             UINT32 Next = ExfatNextCluster(Ctx, Temp);
@@ -899,7 +900,7 @@ STATIC INT ExfatTruncate(VfsInode *Inode, UINT64 NewSize) {
         return 0;
     }
 
-    // Считаем текущие кластеры
+    // Counting current clusters
     Temp = Cluster;
     while (Temp >= 2 && Temp != EXFAT_FAT_END) {
         CurrentClusters++;
@@ -907,14 +908,14 @@ STATIC INT ExfatTruncate(VfsInode *Inode, UINT64 NewSize) {
         Temp = ExfatNextCluster(Ctx, Temp);
     }
 
-    // Если нужно меньше кластеров — урезаем
+    // If you need fewer clusters, we cut them down.
     if (CurrentClusters > NeededClusters) {
         Temp = Cluster;
         for (UINT32 i = 0; i < NeededClusters && Temp >= 2; i++) {
             LastCluster = Temp;
             Temp = ExfatNextCluster(Ctx, Temp);
         }
-        // Освобождаем лишние
+        // Freeing up the extra ones
         while (Temp >= 2 && Temp != EXFAT_FAT_END) {
             UINT32 Next = ExfatNextCluster(Ctx, Temp);
             Ctx->FatCache[Temp] = EXFAT_FAT_FREE;
@@ -923,9 +924,9 @@ STATIC INT ExfatTruncate(VfsInode *Inode, UINT64 NewSize) {
         Ctx->FatCache[LastCluster] = EXFAT_FAT_END;
     }
 
-    // Если нужно больше кластеров — выделяем
+    // If you need more clusters, select
     if (CurrentClusters < NeededClusters) {
-        // Находим последний кластер
+        // Finding the last cluster
         if (CurrentClusters == 0) {
             if (ExfatAllocCluster(Ctx, &Cluster) != 0) return -1;
             Priv->FirstCluster = Cluster;
@@ -952,7 +953,7 @@ STATIC INT ExfatTruncate(VfsInode *Inode, UINT64 NewSize) {
     Inode->ISize = NewSize;
     Priv->DataLength = NewSize;
 
-    // Обновляем запись в каталоге
+    // Updating the catalog entry
     UINT8 *DirBuf = (UINT8*)MemoryAllocate(ClusterSize);
     if (DirBuf) {
         UINT32 DirCluster = Priv->DirCluster ? Priv->DirCluster : Ctx->RootCluster;
@@ -1378,7 +1379,7 @@ INT ExfatFormat(Disk *Disk, UINT64 StartLba, UINT64 SectorCount) {
 
     SectorSize = Disk->SectorSize;
 
-    // Если SectorCount == 0 — форматируем весь диск
+    // If SectorCount == 0, format the entire disk.
     if (SectorCount == 0) {
         TotalSectors = Disk->SectorCount;
         StartLba = 0;
@@ -1414,7 +1415,7 @@ INT ExfatFormat(Disk *Disk, UINT64 StartLba, UINT64 SectorCount) {
     Vbr.JumpBoot[1] = 0x76;
     Vbr.JumpBoot[2] = 0x90;
     MemCpy(Vbr.FsName, "EXFAT   ", 8);
-    Vbr.PartitionOffset = StartLba;        // ← LBA начала раздела
+    Vbr.PartitionOffset = StartLba;        // ← LBA of the beginning of the partition
     Vbr.VolumeLength = TotalSectors;
     Vbr.FatOffset = FatOffset;
     Vbr.FatLength = FatSectors;
@@ -1432,7 +1433,7 @@ INT ExfatFormat(Disk *Disk, UINT64 StartLba, UINT64 SectorCount) {
     Vbr.BootCode[0] = 0xF4;
     Vbr.Signature = 0xAA55;
 
-    // ★ Всё пишем со смещением StartLba
+    // We write everything with the StartLba offset.
     if (Disk->Write(Disk, StartLba + 0, 1, &Vbr) != 0) return -1;
 
     // Create FAT
@@ -1463,7 +1464,7 @@ INT ExfatFormat(Disk *Disk, UINT64 StartLba, UINT64 SectorCount) {
                    SectorSize);
         }
 
-        // ★ Смещение StartLba
+        // StartLba Offset
         if (Disk->Write(Disk, StartLba + FatOffset + I, Chunk, BlockBuf) != 0) {
             MemoryFree(BlockBuf);
             MemoryFree(Fat);
@@ -1495,7 +1496,7 @@ INT ExfatFormat(Disk *Disk, UINT64 StartLba, UINT64 SectorCount) {
 
     RootSector = ClusterHeapOffset + (RootCluster - 2) * SectorsPerCluster;
 
-    // ★ Смещение StartLba
+    // StartLba Offset
     if (Disk->Write(Disk, StartLba + RootSector, SectorsPerCluster, ClusterBuf) != 0) {
         MemoryFree(ClusterBuf);
         return -1;
@@ -1503,6 +1504,14 @@ INT ExfatFormat(Disk *Disk, UINT64 StartLba, UINT64 SectorCount) {
     MemoryFree(ClusterBuf);
 
     if (Disk->Flush) Disk->Flush(Disk);
+
+    INT CfgRc = DiskCfgWriteVolume(Disk, StartLba,
+                                    SectorCount ? SectorCount : Disk->SectorCount,
+                                    DISKCFG_FS_EXFAT, "", FALSE);
+    if (CfgRc != SUCCESS) {
+        BaseconPrintf(BASECON_TYPE_WARNING,
+                      "fat32: disk.cfg not written (%d)\n", CfgRc);
+    }
 
     return 0;
 }

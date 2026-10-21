@@ -274,9 +274,9 @@ STATIC VOID ComRegisterOne(ComDevice *Dev, UINT8 Index) {
     SysDevice *Sd = SysDeviceCreate(Parent, Name, Desc, SYSDEV_TYPE_SERIAL);
     if (!Sd) return;
 
-    // --- Ресурсы ---
+    // Resources
 
-    // I/O порт (8 регистров)
+    // I/O port (8 registers)
     SysDeviceAddResource(Sd, SYSDEV_RES_IO, Dev->Port, 8);
 
     // IRQ
@@ -285,13 +285,13 @@ STATIC VOID ComRegisterOne(ComDevice *Dev, UINT8 Index) {
         SysDeviceAddResource(Sd, SYSDEV_RES_IRQ, Irq, 1);
     }
 
-    // --- Свойства ---
+    // Properties
 
     SysDeviceSetPropU32(Sd, "port", Dev->Port);
     SysDeviceSetPropU32(Sd, "irq", Irq);
     SysDeviceSetPropU32(Sd, "baud", Dev->BaudRate);
 
-    // --- Привязка к KDriver ---
+    // Linking to KDriver
 
     if (Dev->Driver) {
         SysDeviceBindDriver(Sd, Dev->Driver);

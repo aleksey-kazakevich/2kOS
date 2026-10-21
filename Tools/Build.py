@@ -30,8 +30,8 @@ def log_build(msg): print(f"{C_CYAN}[BUILD]{C_NC} {msg}")
 SCRIPT_PATH = Path(__file__).resolve()
 
 # Базовые пути (будут изменены при первом запуске)
-PROJECT_ROOT = "/mnt/c/Users/alex/Desktop/2kOS"
-TOOLS_DIR = "/mnt/c/Users/alex/Desktop/2kOS/Tools/Make"
+PROJECT_ROOT = "/mnt/c/Users/user/Desktop/2kOS"
+TOOLS_DIR = "/mnt/c/Users/user/Desktop/2kOS/Tools/Make"
 # Директория для сборки внутри WSL (НЕ на NTFS!)
 BUILD_TMP = Path("/tmp/2kOS_build")
 ISO_OUT_WIN = Path(PROJECT_ROOT)  # Куда копировать готовые ISO на Windows

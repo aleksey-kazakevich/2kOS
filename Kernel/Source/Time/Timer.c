@@ -1,3 +1,5 @@
+#pragma GCC optimize ("O0")
+
 #include <Drivers/Irq/Apic/ApicRegs.h>
 #include <Drivers/Irq/Apic/Ioapic.h>
 #include <Drivers/Irq/Apic/Apic.h>
@@ -9,11 +11,11 @@
 #include <Asm/Cpu.h>
 #include <Return.h>
 #include <Asm/Io.h>
+#include <Idt.h>
 
 volatile UINT32 Seconds = 0;
 BOOL TimerInitialized = FALSE;
 
-#define TIMER_VECTOR        0x20
 #define PIT_BASE_FREQ       1193180U
 #define PIT_MAX_COUNT       0xFFFFU
 #define APIC_DIVISOR        16
@@ -22,16 +24,7 @@ BOOL TimerInitialized = FALSE;
 #define HPET_CALIB_MS       10
 #define VERIFY_MS           5
 
-struct {
-    UINT64 Ticks;
-    UINT32 Period; 
-    UINT32 TscKhz;
-    UINT32 ApicBusKhz;
-    UINT32 TickHz;
-    UINT32 Divider;
-    UINT32 InitCount;
-    BOOL Calibrated;
-} GTimer = {0};
+Timer GTimer = {0};
 
 
 STATIC INLINE VOID PitSetMode(UINT8 Channel, UINT8 Mode, UINT8 Access);
@@ -254,7 +247,7 @@ STATIC BOOL TimerVerifyCalibrationFast(UINT32 VerifyMs) {
     ApicWriteReg(LAPIC_TIMER_INITCNT, 0);
     StartTicks = GTimer.Ticks;
 
-    ApicWriteReg(LAPIC_LVT_TIMER, TIMER_VECTOR | TIMER_PERIODIC);
+    ApicWriteReg(LAPIC_LVT_TIMER, TIMER | TIMER_PERIODIC);
     ApicWriteReg(LAPIC_TIMER_INITCNT, InitVal);
 
     if (HpetIsAvailable()) {
@@ -321,6 +314,8 @@ VOID TimerInit(UINT32 DesiredFreq) {
         GTimer.Calibrated = TRUE;
     }
 
+    GTimer.SchedTicks = 0;
+
     GTimer.ApicBusKhz = (UINT32)((UINT64)GTimer.Period * 1000 / APIC_DIVISOR / 1000);
     if (GTimer.Calibrated && !UsedFadtFreq) {
         TimerVerifyCalibrationFast(VERIFY_MS);
@@ -343,7 +338,7 @@ VOID TimerInit(UINT32 DesiredFreq) {
     GTimer.InitCount = InitValue;
     GTimer.TickHz = DesiredFreq ? DesiredFreq : 1000;
     ApicWriteReg(LAPIC_TIMER_DIV, TIMER_DIV_16);
-    ApicWriteReg(LAPIC_LVT_TIMER, TIMER_VECTOR | TIMER_PERIODIC);
+    ApicWriteReg(LAPIC_LVT_TIMER, TIMER | TIMER_PERIODIC);
     ApicWriteReg(LAPIC_TIMER_INITCNT, InitValue);
 
     TimerDelayInit();
@@ -354,6 +349,7 @@ VOID TimerInit(UINT32 DesiredFreq) {
 
 VOID TimerHandler(VOID) {
     GTimer.Ticks++;
+    GTimer.SchedTicks++;
     if (GTimer.Ticks >= GTimer.TickHz) {
         GTimer.Ticks = 0;
         Seconds++;

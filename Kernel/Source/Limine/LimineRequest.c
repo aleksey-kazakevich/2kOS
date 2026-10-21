@@ -56,3 +56,11 @@ struct limine_module_request module_req = {
     .revision = 0,
     .response = NULLPTR
 };
+
+__attribute__((section(".limine_reqs"), used))
+struct limine_mp_request mp_req = {
+    .id = LIMINE_MP_REQUEST_ID,
+    .revision = 0,
+    .response = NULLPTR,
+    .flags = 0
+};

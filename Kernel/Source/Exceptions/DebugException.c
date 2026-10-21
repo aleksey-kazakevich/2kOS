@@ -1,3 +1,4 @@
+#include <Utils/ExceptionLog.h>
 #include <ExceptionHelper.h>
 #include <Interrupt.h>
 #include <Asm/Cpu.h>
@@ -31,6 +32,7 @@ VOID DebugExceptionHandler(InterruptFrame *Frame) {
         FatalF("kernel debug exception", Frame);
     } else {
         WriteDr6(DR6_CLEAR_MASK);
+	ExceptionLogPush(EXC_DEBUG, Frame);
     }
     
     return;

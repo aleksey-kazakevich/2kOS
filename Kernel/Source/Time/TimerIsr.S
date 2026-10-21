@@ -1,6 +1,6 @@
 .globl TimerIsr
 .extern TimerHandler
-.extern SchedulerFromIsr
+.extern ScheduleFromIsr
 
 TimerIsr:
     push %rax

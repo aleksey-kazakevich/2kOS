@@ -12,7 +12,7 @@
 
 #define SYSDEV_MAX_DEPTH    16
 
-// Цвета для разных типов устройств
+// Colors for different types of devices
 STATIC FramebufferColor TypeColor(SysDeviceType Type) {
     switch (Type) {
         case SYSDEV_TYPE_ROOT:        return RGB_WHITE;
@@ -173,7 +173,7 @@ STATIC VOID DumpTree(SysDevice *Dev, INT Depth, BOOL IsLast) {
 
 STATIC VOID WalkTopLevelForTree(SysDevice *Dev, VOID *UserData) {
     (VOID)UserData;
-    if (Dev->Parent) return;   // только top-level
+    if (Dev->Parent) return;   // top-level only
     DumpTree(Dev, 0, TRUE);
 }
 
@@ -321,7 +321,7 @@ STATIC INT CmdSysDevInfo(const CHAR *Arg) {
 
     SysDevice *Dev = NULLPTR;
 
-    // Пробуем как ID (если начинается с цифры)
+    // We try it as an ID (if it starts with a number)
     if (Arg[0] >= '0' && Arg[0] <= '9') {
         Dev = SysDeviceFindById((UINT32)AToI(Arg));
     }
@@ -347,7 +347,7 @@ STATIC VOID FindVisitor(SysDevice *Dev, VOID *UserData) {
     const CHAR *Substr = (const CHAR *)UserData;
     if (!Substr) return;
 
-    // Ищем подстроку без учёта регистра (упрощённо — прямое вхождение)
+    // We are looking for a case-insensitive substring (simplified — direct occurrence)
     if (StrStr(Dev->Name, Substr)) {
         GFindFound = TRUE;
         PrintFlatRow(Dev, NULLPTR);

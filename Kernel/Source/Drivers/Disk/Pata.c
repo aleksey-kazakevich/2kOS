@@ -7,6 +7,7 @@
 #include <Lib/String.h>
 #include <Mem/Paging.h>
 #include <Time/Timer.h>
+#include <Lib/StdIo.h>
 #include <SysDevice.h>
 #include <SpinLock.h>
 #include <Basecon.h>
@@ -21,6 +22,11 @@
  * ============================================================================ */
 
 #define PATA_POLL_TIMEOUT_MS      1000
+#define ATAPI_PACKET_TIMEOUT_MS   5000
+
+/* ATAPI signature after IDENTIFY_PACKET */
+#define ATAPI_SIG_LBA_MID   0x14
+#define ATAPI_SIG_LBA_HIGH  0xEB
 
 /* ============================================================================
  * GLOBAL STATE
@@ -41,7 +47,7 @@ STATIC UINT32 GDmaFailures = 0;
 STATIC UINT32 GPioFallbacks = 0;
 
 PataDrive PataDrives[4];
-STATIC Disk GPataDiskObjects[4];
+STATIC Disk GPataDiskObjects[4];       /* ATA/ATAPI disks: 0..3 */
 
 extern ListHead GDiskList;
 extern UINT32 GDiskCount;
@@ -229,7 +235,7 @@ STATIC VOID SetupLba48Regs(UINT16 Base, UINT16 Ctrl, UINT64 Lba,
 }
 
 /* ============================================================================
- * PIO
+ * PIO (for ATA)
  * ============================================================================ */
 
 STATIC INT PataPioReadSectors(PataDrive *Drive, UINT64 Lba, UINT32 Count, VOID *Buffer) {
@@ -329,12 +335,397 @@ STATIC INT PataPioWriteSectors(PataDrive *Drive, UINT64 Lba, UINT32 Count, const
 }
 
 /* ============================================================================
- * DMA
+ * ATAPI HELPERS
+ * ============================================================================ */
+
+STATIC VOID AtapiWriteCdb(UINT16 Base, const UINT8 *Cdb, UINT32 Len) {
+    for (UINT32 I = 0; I + 1 < Len; I += 2) {
+        UINT16 Word = (UINT16)Cdb[I] | ((UINT16)Cdb[I + 1] << 8);
+        Outw(Base + PATA_DATA, Word);
+    }
+}
+
+STATIC VOID AtapiReadBytes(UINT16 Base, UINT8 *Out, UINT32 ByteCount) {
+    UINT32 WordCount = ByteCount / 2;
+    for (UINT32 I = 0; I < WordCount; I++) {
+        UINT16 W = Inw(Base + PATA_DATA);
+        Out[I * 2 + 0] = (UINT8)(W & 0xFF);
+        Out[I * 2 + 1] = (UINT8)((W >> 8) & 0xFF);
+    }
+    if (ByteCount & 1) {
+        UINT16 W = Inw(Base + PATA_DATA);
+        Out[ByteCount - 1] = (UINT8)(W & 0xFF);
+    }
+}
+
+STATIC VOID AtapiWriteBytes(UINT16 Base, const UINT8 *In, UINT32 ByteCount) {
+    UINT32 WordCount = ByteCount / 2;
+    for (UINT32 I = 0; I < WordCount; I++) {
+        UINT16 W = (UINT16)In[I * 2] | ((UINT16)In[I * 2 + 1] << 8);
+        Outw(Base + PATA_DATA, W);
+    }
+    if (ByteCount & 1) {
+        Outw(Base + PATA_DATA, In[ByteCount - 1]);
+    }
+}
+
+INT ATTRIBUTE(noinline) PataAtapiPacketEx(PataDrive *Drive, const UINT8 *Cdb,
+                             UINT32 ReadBytes, VOID *ReadBuf,
+                             UINT32 WriteBytes, const VOID *WriteBuf,
+                             UINT8 *SenseOut) {
+    if (!Drive || !Cdb) RETURN(DEVICE_INVALID);
+    if (Drive->Type != PATA_TYPE_ATAPI) RETURN(DEVICE_INVALID);
+    if (ReadBytes && !ReadBuf) RETURN(DEVICE_INVALID);
+    if (WriteBytes && !WriteBuf) RETURN(DEVICE_INVALID);
+    if (ReadBytes && WriteBytes) RETURN(INCORRECT_VALUE);
+
+    UINT16 Base = Drive->BasePort;
+    UINT16 Ctrl = Drive->CtrlPort;
+
+    /* 1. Wait BSY=0 */
+    if (WaitBsyClear(Base, Ctrl, PATA_POLL_TIMEOUT_MS) != SUCCESS)
+        RETURN(TIMEOUT);
+
+    /* 2. Choosing a device */
+    SelectDeviceAndDelay(Base, Ctrl, Drive->Drive, 0, 0);
+
+    /* 3. FEATURES = 0 (PIO) */
+    Outb(Base + PATA_FEATURE, 0x00);
+
+    /* 4. BYTE_COUNT_LOW/HIGH
+     *
+     * For read commands: we tell the controller how many bytes we are ready to accept.
+     *   - INQUIRY: 36
+     *   - READ_CAPACITY: 8
+     *   - READ_10: SectorSize * Count
+     *   - REQUEST_SENSE: 18
+     *
+     * For write commands: the exact size of the data.
+     */
+    UINT16 ByteCount = 0;
+    if (ReadBytes)  ByteCount = (ReadBytes  > 0xFFFF) ? 0xFFFF : (UINT16)ReadBytes;
+    if (WriteBytes) ByteCount = (WriteBytes > 0xFFFF) ? 0xFFFF : (UINT16)WriteBytes;
+
+    Outb(Base + PATA_NSECT, (UINT8)((ByteCount >> 8) & 0xFF));  /* BYTE_COUNT_HIGH */
+    Outb(Base + PATA_LCYL,  (UINT8)(ByteCount & 0xFF));         /* BYTE_COUNT_LOW  */
+    Outb(Base + PATA_HCYL,  0);                                 /* not used  */
+
+    /* 5. PACKET command */
+    Outb(Base + PATA_COMMAND, PATA_CMD_PACKET);
+
+    /* 6. We are waiting for the DRQ — the device is ready to accept the CDB */
+    if (WaitDrqOrErr(Base, Ctrl, PATA_POLL_TIMEOUT_MS) != SUCCESS) {
+        if (SenseOut) PataAtapiRequestSense(Drive);
+        RETURN(DEVICE_ERROR);
+    }
+
+    /* 7. Writing a 12-byte CDB */
+    AtapiWriteCdb(Base, Cdb, 12);
+
+    /* 8. Command without data — waiting for completion */
+    if (ReadBytes == 0 && WriteBytes == 0) {
+        if (WaitBsyClear(Base, Ctrl, PATA_POLL_TIMEOUT_MS) != SUCCESS)
+            RETURN(TIMEOUT);
+        UINT8 Status = Inb(Base + PATA_STATUS);
+        if (Status & PATA_STATUS_ERR) {
+            if (SenseOut) PataAtapiRequestSense(Drive);
+            RETURN(DEVICE_ERROR);
+        }
+        RETURN(SUCCESS);
+    }
+
+    /* 9. Read: waiting for the DRQ, reading the data */
+    if (ReadBytes > 0) {
+        UINT8 *Out = (UINT8 *)ReadBuf;
+        UINT32 Remaining = ReadBytes;
+
+        while (Remaining > 0) {
+            UINT32 Chunk = (Remaining > 512) ? 512 : Remaining;
+
+            if (WaitDrqOrErr(Base, Ctrl, PATA_POLL_TIMEOUT_MS) != SUCCESS) {
+                if (SenseOut) PataAtapiRequestSense(Drive);
+                RETURN(DEVICE_ERROR);
+            }
+
+            AtapiReadBytes(Base, Out, Chunk);
+
+            Out += Chunk;
+            Remaining -= Chunk;
+        }
+
+        if (WaitBsyClear(Base, Ctrl, PATA_POLL_TIMEOUT_MS) != SUCCESS)
+            RETURN(TIMEOUT);
+
+        UINT8 Status = Inb(Base + PATA_STATUS);
+        if (Status & PATA_STATUS_ERR) {
+            if (SenseOut) PataAtapiRequestSense(Drive);
+            RETURN(DEVICE_ERROR);
+        }
+
+        CheckErrAndClear(Base);
+        RETURN(SUCCESS);
+    }
+
+    /* 10. Write: waiting for DRQ, writing data */
+    if (WriteBytes > 0) {
+        const UINT8 *In = (const UINT8 *)WriteBuf;
+        UINT32 Remaining = WriteBytes;
+
+        while (Remaining > 0) {
+            UINT32 Chunk = (Remaining > 512) ? 512 : Remaining;
+
+            if (WaitDrqOrErr(Base, Ctrl, PATA_POLL_TIMEOUT_MS) != SUCCESS) {
+                if (SenseOut) PataAtapiRequestSense(Drive);
+                RETURN(DEVICE_ERROR);
+            }
+
+            AtapiWriteBytes(Base, In, Chunk);
+
+            In += Chunk;
+            Remaining -= Chunk;
+        }
+
+        if (WaitBsyClear(Base, Ctrl, PATA_POLL_TIMEOUT_MS) != SUCCESS)
+            RETURN(TIMEOUT);
+
+        UINT8 Status = Inb(Base + PATA_STATUS);
+        if (Status & PATA_STATUS_ERR) {
+            if (SenseOut) PataAtapiRequestSense(Drive);
+            RETURN(DEVICE_ERROR);
+        }
+
+        CheckErrAndClear(Base);
+        RETURN(SUCCESS);
+    }
+
+    RETURN(SUCCESS);
+}
+
+/* Simplified wrapper for reading commands */
+INT ATTRIBUTE(noinline) PataAtapiPacket(PataDrive *Drive, const UINT8 *Cdb,
+                           UINT32 ReadBytes, VOID *ReadBuf,
+                           UINT8 *SenseOut) {
+    return PataAtapiPacketEx(Drive, Cdb, ReadBytes, ReadBuf,
+                             0, NULLPTR, SenseOut);
+}
+
+/* ============================================================================
+ * ATAPI COMMANDS
+ * ============================================================================ */
+
+INT PataAtapiRequestSense(PataDrive *Drive) {
+    if (!Drive || Drive->Type != PATA_TYPE_ATAPI)
+        RETURN(DEVICE_INVALID);
+
+    UINT8 Cdb[12];
+    MemSet(Cdb, 0, 12);
+    Cdb[0] = SCSI_REQUEST_SENSE;
+    Cdb[4] = 18;  /* Allocation Length */
+
+    UINT8 Sense[18];
+    MemSet(Sense, 0, 18);
+
+    /* Sense-out is not needed in this command, otherwise recursion */
+    INT Rc = PataAtapiPacket(Drive, Cdb, 18, Sense, NULLPTR);
+    if (Rc != SUCCESS)
+        RETURN(Rc);
+
+    Drive->AtapiSenseKey = Sense[2] & 0x0F;
+    Drive->AtapiAsc      = Sense[12];
+    Drive->AtapiAscq     = Sense[13];
+
+    if (Drive->AtapiSenseKey == 0x02 && Drive->AtapiAsc == 0x3A)
+        Drive->AtapiMediaPresent = FALSE;
+    if (Drive->AtapiSenseKey == 0x06)
+        Drive->AtapiMediaPresent = FALSE;
+
+    RETURN(SUCCESS);
+}
+
+INT PataAtapiTestUnitReady(PataDrive *Drive) {
+    if (!Drive || Drive->Type != PATA_TYPE_ATAPI)
+        RETURN(DEVICE_INVALID);
+
+    UINT8 Cdb[12];
+    MemSet(Cdb, 0, 12);
+    Cdb[0] = SCSI_TEST_UNIT_READY;
+
+    INT Rc = PataAtapiPacket(Drive, Cdb, 0, NULLPTR, NULLPTR);
+
+    if (Rc == SUCCESS) {
+        Drive->AtapiMediaPresent = TRUE;
+        RETURN(SUCCESS);
+    }
+
+    /* We are trying to query sense to understand the reason. */
+    PataAtapiRequestSense(Drive);
+
+    /* Sense Key 0x02/ASC 0x3A → no disk. This is not a driver error.. */
+    if (Drive->AtapiSenseKey == 0x02 && Drive->AtapiAsc == 0x3A) {
+        Drive->AtapiMediaPresent = FALSE;
+        RETURN(NO_OBJECT);
+    }
+
+    RETURN(Rc);
+}
+
+INT PataAtapiInquiry(PataDrive *Drive) {
+    if (!Drive || Drive->Type != PATA_TYPE_ATAPI)
+        RETURN(DEVICE_INVALID);
+
+    UINT8 Cdb[12];
+    MemSet(Cdb, 0, 12);
+    Cdb[0] = SCSI_INQUIRY;
+    Cdb[4] = 36;
+
+    UINT8 Resp[36];
+    MemSet(Resp, 0, 36);
+
+    INT Rc = PataAtapiPacket(Drive, Cdb, 36, Resp, NULLPTR);
+    if (Rc != SUCCESS)
+        RETURN(Rc);
+
+    MemCpy(Drive->AtapiVendor,   Resp + 8,  8);
+    Drive->AtapiVendor[8] = '\0';
+    MemCpy(Drive->AtapiProduct,  Resp + 16, 16);
+    Drive->AtapiProduct[16] = '\0';
+    MemCpy(Drive->AtapiRevision, Resp + 32, 4);
+    Drive->AtapiRevision[4] = '\0';
+
+    for (INT I = 7; I >= 0 && Drive->AtapiVendor[I] == ' '; I--)
+        Drive->AtapiVendor[I] = '\0';
+    for (INT I = 15; I >= 0 && Drive->AtapiProduct[I] == ' '; I--)
+        Drive->AtapiProduct[I] = '\0';
+    for (INT I = 3; I >= 0 && Drive->AtapiRevision[I] == ' '; I--)
+        Drive->AtapiRevision[I] = '\0';
+
+    BaseconPrintf(BASECON_TYPE_NORMAL,
+                  "atapi: %s %s %s\n",
+                  Drive->AtapiVendor,
+                  Drive->AtapiProduct,
+                  Drive->AtapiRevision);
+
+    RETURN(SUCCESS);
+}
+
+INT PataAtapiReadCapacity(PataDrive *Drive) {
+    if (!Drive || Drive->Type != PATA_TYPE_ATAPI)
+        RETURN(DEVICE_INVALID);
+
+    UINT8 Cdb[12];
+    MemSet(Cdb, 0, 12);
+    Cdb[0] = SCSI_READ_CAPACITY_10;
+
+    UINT8 Resp[8];
+    MemSet(Resp, 0, 8);
+
+    INT Rc = PataAtapiPacket(Drive, Cdb, 8, Resp, NULLPTR);
+    if (Rc != SUCCESS)
+        RETURN(Rc);
+
+    UINT32 LastLba = ((UINT32)Resp[0] << 24) |
+                     ((UINT32)Resp[1] << 16) |
+                     ((UINT32)Resp[2] << 8)  |
+                     ((UINT32)Resp[3]);
+    UINT32 BlockSize = ((UINT32)Resp[4] << 24) |
+                       ((UINT32)Resp[5] << 16) |
+                       ((UINT32)Resp[6] << 8)  |
+                       ((UINT32)Resp[7]);
+
+    if (BlockSize == 0 || BlockSize > 8192)
+        BlockSize = ATAPI_SECTOR_SIZE;
+
+    Drive->AtapiSectorSize = BlockSize;
+    Drive->SectorSize = (UINT16)BlockSize;
+    Drive->TotalSectors = (UINT64)LastLba + 1;
+
+    BaseconPrintf(BASECON_TYPE_NORMAL,
+                  "atapi: capacity: %llu sectors x %u bytes (%llu MB)\n",
+                  Drive->TotalSectors, BlockSize,
+                  (Drive->TotalSectors * BlockSize) / (1024 * 1024));
+
+    RETURN(SUCCESS);
+}
+
+INT PataAtapiStartStopUnit(PataDrive *Drive, BOOL Start, BOOL LoEj) {
+    if (!Drive || Drive->Type != PATA_TYPE_ATAPI)
+        RETURN(DEVICE_INVALID);
+
+    UINT8 Cdb[12];
+    MemSet(Cdb, 0, 12);
+    Cdb[0] = SCSI_START_STOP_UNIT;
+    Cdb[4] = (Start ? 0x01 : 0x00) | (LoEj ? 0x02 : 0x00);
+
+    INT Rc = PataAtapiPacket(Drive, Cdb, 0, NULLPTR, NULLPTR);
+    if (Rc != SUCCESS) {
+        PataAtapiRequestSense(Drive);
+        RETURN(Rc);
+    }
+    RETURN(SUCCESS);
+}
+
+INT PataAtapiReadSectors(PataDrive *Drive, UINT64 Lba, UINT32 Count, VOID *Buffer) {
+    if (!Drive || !Buffer || Count == 0)
+        RETURN(DEVICE_INVALID);
+    if (Drive->Type != PATA_TYPE_ATAPI)
+        RETURN(DEVICE_INVALID);
+    if (!Drive->AtapiMediaPresent)
+        RETURN(NO_OBJECT);
+
+    if (Lba + Count > Drive->TotalSectors)
+        RETURN(INCORRECT_VALUE);
+
+    UINT32 SectorSize = Drive->AtapiSectorSize ? Drive->AtapiSectorSize : ATAPI_SECTOR_SIZE;
+    UINT8 *Out = (UINT8 *)Buffer;
+    UINT64 CurLba = Lba;
+    UINT32 Remaining = Count;
+
+    while (Remaining > 0) {
+        UINT16 ThisCount = (Remaining > 0xFFFF) ? 0xFFFF : (UINT16)Remaining;
+
+        UINT8 Cdb[12];
+        MemSet(Cdb, 0, 12);
+        Cdb[0] = SCSI_READ_10;
+        Cdb[1] = 0x00;
+        Cdb[2] = (UINT8)((CurLba >> 24) & 0xFF);
+        Cdb[3] = (UINT8)((CurLba >> 16) & 0xFF);
+        Cdb[4] = (UINT8)((CurLba >>  8) & 0xFF);
+        Cdb[5] = (UINT8)((CurLba      ) & 0xFF);
+        Cdb[6] = 0x00;
+        Cdb[7] = (UINT8)((ThisCount >> 8) & 0xFF);
+        Cdb[8] = (UINT8)((ThisCount     ) & 0xFF);
+        Cdb[9] = 0x00;
+
+        UINT32 BytesThis = (UINT32)ThisCount * SectorSize;
+
+        INT Rc = PataAtapiPacket(Drive, Cdb, BytesThis, Out, NULLPTR);
+        if (Rc != SUCCESS) {
+            PataAtapiRequestSense(Drive);
+            /* One repeat attempt */
+            Rc = PataAtapiPacket(Drive, Cdb, BytesThis, Out, NULLPTR);
+            if (Rc != SUCCESS)
+                RETURN(Rc);
+        }
+
+        Out += BytesThis;
+        CurLba += ThisCount;
+        Remaining -= ThisCount;
+    }
+
+    Drive->TotalReads++;
+    RETURN(SUCCESS);
+}
+
+/* ============================================================================
+ * DMA (for ATA)
  * ============================================================================ */
 
 STATIC INT PataDmaTransfer(PataDrive *Drive, PataRequest *Req) {
     if (!Drive || !Req || !Drive->BusMasterBase || Req->Count == 0)
         RETURN(DEVICE_INVALID);
+
+    if (Drive->Type == PATA_TYPE_ATAPI)
+        RETURN(NOT_SUPPORTED);
 
     if (Req->Count > MAX_DMA_SECTORS)
         RETURN(INCORRECT_VALUE);
@@ -375,10 +766,7 @@ STATIC INT PataDmaTransfer(PataDrive *Drive, PataRequest *Req) {
     IoDelay(Drive->CtrlPort);
 
     for (INT I = 0; I < PATA_TIMEOUT_LOOPS; I++) {
-        UINT8 Status = Inb(Drive->BasePort + PATA_STATUS);
         UINT8 BmsrStatus = Inb(Drive->BusMasterBase + BMSR);
-
-        (VOID)Status;
 
         if (BmsrStatus & BMSR_ERROR) {
             PataFreePrdt(Req->Prdt);
@@ -564,6 +952,13 @@ INT PataReadSectorsAsync(PataDrive *Drive, UINT64 Lba, UINT32 Count,
     Req->Prdt = NULLPTR;
     SpinLockInit(&Req->Lock);
 
+    /* ATAPI — always synchronously via PIO PACKET */
+    if (Drive->Type == PATA_TYPE_ATAPI) {
+        Req->Result = PataAtapiReadSectors(Drive, Lba, Count, Buffer);
+        Req->Completed = TRUE;
+        return Req->Result;
+    }
+
     INT Result = PataDmaTransfer(Drive, Req);
     if (Result != 0) {
         Req->Result = PataPioReadSectors(Drive, Lba, Count, Buffer);
@@ -579,6 +974,9 @@ INT PataWriteSectorsAsync(PataDrive *Drive, UINT64 Lba, UINT32 Count,
                           const VOID *Buffer, PataRequest *Req) {
     if (!Drive || !Buffer || !Req || Count == 0)
         RETURN(DEVICE_INVALID);
+
+    if (Drive->Type == PATA_TYPE_ATAPI)
+        RETURN(NOT_SUPPORTED);
 
     if (Drive->TotalSectors && Lba + Count > Drive->TotalSectors)
         RETURN(DEVICE_INVALID);
@@ -624,7 +1022,8 @@ INT PataWaitRequest(PataRequest *Req, UINT32 TimeoutMs) {
             PataCancelRequest(Req);
             return -TIMEOUT;
         }
-        CpuPause();
+        /* sti; pause; cli — so that IRQ can set Completed */
+        __asm__ volatile ("sti; pause; cli" ::: "memory");
     }
 
     return Req->Result;
@@ -663,6 +1062,9 @@ INT PataReadSectors(PataDrive *Drive, UINT64 Lba, UINT32 Count, VOID *Buffer) {
     if (!Drive || !Buffer || Count == 0)
         RETURN(DEVICE_INVALID);
 
+    if (Drive->Type == PATA_TYPE_ATAPI)
+        return PataAtapiReadSectors(Drive, Lba, Count, Buffer);
+
     PataRequest Req;
     INT Result = PataReadSectorsAsync(Drive, Lba, Count, Buffer, &Req);
     if (Result != 0)
@@ -675,6 +1077,9 @@ INT PataWriteSectors(PataDrive *Drive, UINT64 Lba, UINT32 Count, const VOID *Buf
     if (!Drive || !Buffer || Count == 0)
         RETURN(DEVICE_INVALID);
 
+    if (Drive->Type == PATA_TYPE_ATAPI)
+        RETURN(NOT_SUPPORTED);
+
     PataRequest Req;
     INT Result = PataWriteSectorsAsync(Drive, Lba, Count, Buffer, &Req);
     if (Result != 0)
@@ -686,6 +1091,9 @@ INT PataWriteSectors(PataDrive *Drive, UINT64 Lba, UINT32 Count, const VOID *Buf
 INT PataFlushCache(PataDrive *Drive) {
     if (!Drive)
         return -DEVICE_INVALID;
+
+    if (Drive->Type == PATA_TYPE_ATAPI)
+        return SUCCESS;   /* The CD does not have a write cache */
 
     if (WaitBsyClear(Drive->BasePort, Drive->CtrlPort, PATA_POLL_TIMEOUT_MS) != SUCCESS)
         return -TIMEOUT;
@@ -703,7 +1111,7 @@ INT PataFlushCache(PataDrive *Drive) {
 }
 
 /* ============================================================================
- * IDENTIFY (ATA only)
+ * IDENTIFY (ATA + ATAPI)
  * ============================================================================ */
 
 INT PataIdentify(PataDrive *Drive, UINT16 IdentBuffer[256]) {
@@ -711,13 +1119,17 @@ INT PataIdentify(PataDrive *Drive, UINT16 IdentBuffer[256]) {
         RETURN(DEVICE_INVALID);
 
     Drive->Type = PATA_TYPE_NONE;
+    Drive->IsAtapi = FALSE;
     Drive->SupportsLba48 = 0;
     Drive->SectorSize = 512;
     Drive->TotalSectors = 0;
+    Drive->AtapiSectorSize = 0;
+    Drive->AtapiMediaPresent = FALSE;
     Drive->IrqPending = 0;
     Drive->IrqCount = 0;
     Drive->Model[0] = '\0';
 
+    /* Step 1: Try IDENTIFY (ATA) */
     SelectDeviceAndDelay(Drive->BasePort, Drive->CtrlPort, Drive->Drive, 0, 0);
 
     Outb(Drive->BasePort + PATA_COMMAND, PATA_CMD_IDENTIFY);
@@ -725,20 +1137,72 @@ INT PataIdentify(PataDrive *Drive, UINT16 IdentBuffer[256]) {
 
     UINT8 Status = Inb(Drive->BasePort + PATA_STATUS);
     if (Status == 0)
-        RETURN(DEVICE_ERROR);
+        RETURN(DEVICE_ERROR);   /* There is no device */
 
-    /* Если ERR и сигнатура ATAPI — не наш диск, скипаем */
+    /* Step 2: Check the ATAPI signature */
     if (Status & PATA_STATUS_ERR) {
-        UINT8 Cl = Inb(Drive->BasePort + PATA_LCYL);
-        UINT8 Ch = Inb(Drive->BasePort + PATA_HCYL);
+        UINT8 Cl = Inb(Drive->BasePort + PATA_LCYL);   /* LBA_MID  */
+        UINT8 Ch = Inb(Drive->BasePort + PATA_HCYL);   /* LBA_HIGH */
 
-        if ((Cl == 0x14 && Ch == 0xEB) || (Cl == 0x69 && Ch == 0x96)) {
-            /* ATAPI — не поддерживаем, выходим */
-            RETURN(NOT_SUPPORTED);
+        if ((Cl == ATAPI_SIG_LBA_MID && Ch == ATAPI_SIG_LBA_HIGH) ||
+            (Cl == 0x69 && Ch == 0x96)) {
+
+            Drive->Type = PATA_TYPE_ATAPI;
+            Drive->IsAtapi = TRUE;
+            Drive->SectorSize = ATAPI_SECTOR_SIZE;
+            Drive->AtapiSectorSize = ATAPI_SECTOR_SIZE;
+
+            /* Resetting the error */
+            Inb(Drive->BasePort + PATA_ERROR);
+
+            SelectDeviceAndDelay(Drive->BasePort, Drive->CtrlPort,
+                                 Drive->Drive, 0, 0);
+
+            Outb(Drive->BasePort + PATA_COMMAND, PATA_CMD_IDENTIFY_PACKET);
+            IoDelay(Drive->CtrlPort);
+
+            if (WaitBsyClear(Drive->BasePort, Drive->CtrlPort,
+                             PATA_POLL_TIMEOUT_MS) != SUCCESS)
+                RETURN(TIMEOUT);
+
+            INT Rc = WaitDrqOrErr(Drive->BasePort, Drive->CtrlPort,
+                                  PATA_POLL_TIMEOUT_MS);
+            if (Rc != SUCCESS)
+                return Rc;
+
+            for (INT I = 0; I < 256; ++I)
+                IdentBuffer[I] = Inw(Drive->BasePort + PATA_DATA);
+
+            /* Model (words 27-46) */
+            for (INT I = 0; I < 20; I++) {
+                UINT16 W = IdentBuffer[27 + I];
+                Drive->Model[I * 2 + 0] = (CHAR)(W >> 8);
+                Drive->Model[I * 2 + 1] = (CHAR)(W & 0xFF);
+            }
+            Drive->Model[40] = '\0';
+            for (INT I = 39; I >= 0 &&
+                 (Drive->Model[I] == ' ' || Drive->Model[I] == '\0'); I--)
+                Drive->Model[I] = '\0';
+
+            /* ATAPI-specific queries */
+            PataAtapiInquiry(Drive);
+
+            INT MediaRc = PataAtapiTestUnitReady(Drive);
+            if (MediaRc == SUCCESS) {
+                PataAtapiReadCapacity(Drive);
+            } else {
+                BaseconPrintf(BASECON_TYPE_NORMAL,
+                              "atapi: no media in drive %u\n",
+                              Drive->Drive);
+            }
+
+            RETURN(SUCCESS);
         }
+
         RETURN(DEVICE_ERROR);
     }
 
+    /* Step 3: Regular ATA */
     if (WaitBsyClear(Drive->BasePort, Drive->CtrlPort,
                      PATA_POLL_TIMEOUT_MS) != SUCCESS)
         RETURN(TIMEOUT);
@@ -755,6 +1219,7 @@ INT PataIdentify(PataDrive *Drive, UINT16 IdentBuffer[256]) {
         RETURN(DEVICE_ERROR);
 
     Drive->Type = PATA_TYPE_ATA;
+    Drive->IsAtapi = FALSE;
 
     UINT32 Lba28 = ((UINT32)IdentBuffer[61] << 16) | IdentBuffer[60];
     Drive->TotalSectors = Lba28;
@@ -764,8 +1229,6 @@ INT PataIdentify(PataDrive *Drive, UINT16 IdentBuffer[256]) {
         UINT64 Lba48 = IdentWordsToUINT64(IdentBuffer, 100);
         if (Lba48 != 0)
             Drive->TotalSectors = Lba48;
-    } else {
-        Drive->SupportsLba48 = 0;
     }
 
     Drive->SectorSize = 512;
@@ -784,7 +1247,7 @@ INT PataIdentify(PataDrive *Drive, UINT16 IdentBuffer[256]) {
 }
 
 /* ============================================================================
- * DISK REGISTRATION
+ * DMA DETECTION
  * ============================================================================ */
 
 STATIC INT PataDetectDMA(PataDrive *Drive, PciDevice *PciPata) {
@@ -813,6 +1276,10 @@ STATIC INT PataDetectDMA(PataDrive *Drive, PciDevice *PciPata) {
     RETURN(SUCCESS);
 }
 
+/* ============================================================================
+ * DISK WRAPPERS
+ * ============================================================================ */
+
 STATIC INT PataReadWrapper(Disk *Disk, UINT64 Lba, UINT32 Count, VOID *Buffer) {
     if (!Disk || !Disk->DriverData) return DEVICE_INVALID;
     PataDrive *Drive = (PataDrive *)Disk->DriverData;
@@ -839,33 +1306,48 @@ STATIC INT PataRegisterDisk(PataDrive *Drive, PataChannel Channel, UINT8 DriveNu
     UINT32 DiskIndex = Channel * 2 + DriveNum;
     if (DiskIndex >= 4) return DEVICE_INVALID;
 
-    Disk *Disk = &GPataDiskObjects[DiskIndex];
-    MemSet(Disk, 0, sizeof(Disk));
+    Disk *PDisk = &GPataDiskObjects[DiskIndex];
+    MemSet(PDisk, 0, sizeof(Disk));
 
-    Disk->Type = DISK_TYPE_PATA;
-    Disk->Index = DiskIndex;
-    DiskMakeName(Disk);
+    if (Drive->Type == PATA_TYPE_ATAPI) {
+        PDisk->Type = DISK_TYPE_OPTICAL;
+    } else {
+        PDisk->Type = DISK_TYPE_PATA;
+    }
+    PDisk->Index = DiskIndex;
+    DiskMakeName(PDisk);
 
-    Disk->SectorCount = Drive->TotalSectors;
-    Disk->SectorSize = Drive->SectorSize;
-    Disk->TotalSize = Disk->SectorCount * Disk->SectorSize;
-    Disk->DriverData = Drive;
-    Disk->Initialized = TRUE;
-    Disk->Read = PataReadWrapper;
-    Disk->Write = PataWriteWrapper;
-    Disk->Flush = PataFlushWrapper;
+    PDisk->SectorCount = Drive->TotalSectors;
+    PDisk->SectorSize = Drive->SectorSize;
+    PDisk->TotalSize = PDisk->SectorCount * PDisk->SectorSize;
+    PDisk->DriverData = Drive;
+    PDisk->Initialized = TRUE;
+    PDisk->Read = PataReadWrapper;
 
-    INT Result = DiskMgrRegisterDisk(Disk);
+    SnPrintf(PDisk->Name, sizeof(PDisk->Name),
+             Drive->IsAtapi ? "PATAPI%d" : "PATA%d", DiskIndex);
+
+    if (Drive->Type == PATA_TYPE_ATAPI) {
+        PDisk->Write = NULLPTR;   /* CD-ROM is read-only */
+    } else {
+        PDisk->Write = PataWriteWrapper;
+    }
+    PDisk->Flush = PataFlushWrapper;
+
+    INT Result = DiskMgrRegisterDisk(PDisk);
     if (Result != SUCCESS) {
         return Result;
     }
 
     RETURN(SUCCESS);
 }
-
+	
 /* ============================================================================
  * INIT
  * ============================================================================ */
+
+EXTERN(VOID, PataPrimaryIrq());
+EXTERN(VOID, PataSecondaryIrq());
 
 INT PataInit(PataDrive *Drive, PataChannel Channel, UINT8 DriveNum) {
     if (!Drive || DriveNum > 1)
@@ -894,7 +1376,6 @@ INT PataInit(PataDrive *Drive, PataChannel Channel, UINT8 DriveNum) {
 
     PciDevice *PciPata = PciFindClass(0x01, 0x01);
     if (PciPata) {
-        Drive->Irq = PciPata->InterruptLine;
         Drive->PciDev = PciPata;
         PciEnableBusmaster(PciPata);
         PataDetectDMA(Drive, PciPata);
@@ -911,9 +1392,9 @@ INT PataInit(PataDrive *Drive, PataChannel Channel, UINT8 DriveNum) {
     IoapicUnmaskIrq(Gsi);
 
     if (Channel == PATA_CHANNEL_PRIMARY) {
-        IdtSetGate(Drive->Irq, PataPrimaryIrqHandler, KERNEL_CODE_SEL, IDT_GATE_INT, 0);
+        IdtSetGate(Vector, PataPrimaryIrq, KERNEL_CODE_SEL, IDT_GATE_INT, 0);
     } else {
-        IdtSetGate(Drive->Irq, PataSecondaryIrqHandler, KERNEL_CODE_SEL, IDT_GATE_INT, 0);
+        IdtSetGate(Vector, PataSecondaryIrq, KERNEL_CODE_SEL, IDT_GATE_INT, 0);
     }
 
     SpinLockInit(&GPrimaryQueueLock);
@@ -922,7 +1403,6 @@ INT PataInit(PataDrive *Drive, PataChannel Channel, UINT8 DriveNum) {
     UINT16 Ident[256];
     INT Rc = PataIdentify(Drive, Ident);
     if (Rc == NOT_SUPPORTED) {
-        /* ATAPI — скипаем тихо */
         RETURN(NOT_SUPPORTED);
     }
     if (Rc != 0)
@@ -931,6 +1411,10 @@ INT PataInit(PataDrive *Drive, PataChannel Channel, UINT8 DriveNum) {
     KDriverRegister(KDriverGenerateStruct("PataDisk", DCL1, TRUE, NULLPTR, NULLPTR));
 
     if (Drive->TotalSectors > 0) {
+        PataRegisterDisk(Drive, Channel, DriveNum);
+    } else if (Drive->Type == PATA_TYPE_ATAPI) {
+        /* ATAPI without a disk — we register it with a zero size.
+         * The user will insert the disc and re-scan it. */
         PataRegisterDisk(Drive, Channel, DriveNum);
     }
 
@@ -953,4 +1437,19 @@ void PataResetStatistics(PataDrive *Drive) {
     Drive->TotalWrites = 0;
     Drive->DmaFailures = 0;
     Drive->PioFallbacks = 0;
+}
+
+/* ============================================================================
+ * Public wrapper for ATAPI rescanning (after inserting the disc)
+ * ============================================================================ */
+
+INT PataAtapiRescan(PataDrive *Drive) {
+    if (!Drive || Drive->Type != PATA_TYPE_ATAPI)
+        RETURN(DEVICE_INVALID);
+
+    INT Rc = PataAtapiTestUnitReady(Drive);
+    if (Rc == SUCCESS) {
+        PataAtapiReadCapacity(Drive);
+    }
+    RETURN(Rc);
 }

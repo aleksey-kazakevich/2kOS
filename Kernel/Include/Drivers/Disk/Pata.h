@@ -74,9 +74,7 @@
 #define PATA_DMA_TIMEOUT_MS 5000
 #define PATA_PIO_TIMEOUT_MS 10000
 
-/* ============================================================================
- * ATAPI (optical drives)
- * ============================================================================ */
+/* ============================================================================ ATAPI (optical drives) ============================================================================ */
 
 #define ATAPI_SECTOR_SIZE       2048
 #define ATAPI_CDB_MAX           16
@@ -100,7 +98,8 @@ typedef enum {
 
 typedef enum {
     PATA_TYPE_NONE = 0,
-    PATA_TYPE_ATA
+    PATA_TYPE_ATA,
+    PATA_TYPE_ATAPI
 } PataDeviceType;
 
 typedef enum {
@@ -146,7 +145,19 @@ typedef struct {
     UINT32 DmaFailures;
     UINT32 PioFallbacks;
 
-    CHAR Model[41];
+    CHAR   Model[41];
+
+    BOOL   IsAtapi;
+    UINT8  AtapiPacket[12];
+    UINT16 AtapiMaxLba;
+    UINT32 AtapiSectorSize;
+    BOOL   AtapiMediaPresent;
+    UINT8  AtapiSenseKey;
+    UINT8  AtapiAsc;
+    UINT8  AtapiAscq;
+    CHAR   AtapiVendor[9];
+    CHAR   AtapiProduct[17];
+    CHAR   AtapiRevision[5];
 } PataDrive;
 
 /* Request structure */
@@ -190,3 +201,11 @@ VOID PataDisableInterrupts(UINT16 CtrlPort);
 /* Utility functions */
 UINT8 PataGetIrqCount(PataDrive *Drive);
 void PataResetStatistics(PataDrive *Drive);
+
+INT PataAtapiRequestSense(PataDrive *Drive);
+INT PataAtapiTestUnitReady(PataDrive *Drive);
+INT PataAtapiInquiry(PataDrive *Drive);
+INT PataAtapiReadCapacity(PataDrive *Drive);
+INT PataAtapiStartStopUnit(PataDrive *Drive, BOOL Start, BOOL LoEj);
+INT PataAtapiReadSectors(PataDrive *Drive, UINT64 Lba, UINT32 Count, VOID *Buffer);
+INT PataAtapiRescan(PataDrive *Drive);

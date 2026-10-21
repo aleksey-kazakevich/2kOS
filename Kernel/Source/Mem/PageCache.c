@@ -54,7 +54,7 @@ STATIC VOID PCacheFreePage(PCachePage *Page) {
 }
 
 // ============================================================================
-// DIRECT I/O (в обход кэша)
+// DIRECT I/O (bypassing the cache)
 // ============================================================================
 
 STATIC INT PCacheReadDirect(Disk *Disk, UINT64 Lba, UINT32 Count, VOID *Buf) {
@@ -71,8 +71,6 @@ STATIC INT PCacheWriteDirect(Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *B
 // EVICTION
 // ============================================================================
 
-// Ищем жертву. Возвращает страницу с RefCount == 0, либо NULLPTR.
-// Вызывается с захваченным Lock.
 STATIC PCachePage *PCacheFindVictim(VOID) {
     ListHead *Pos = GPCache.Lru.Prev;
     INT Scanned = 0;
@@ -91,21 +89,18 @@ STATIC PCachePage *PCacheFindVictim(VOID) {
     return NULLPTR;
 }
 
-// Вытесняет одну страницу. Lock НЕ захвачен.
 STATIC BOOL PCacheEvictOne(VOID) {
-    SpinLockAcquire(&GPCache.Lock);
+    UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
 
     PCachePage *Victim = PCacheFindVictim();
     if (!Victim) {
-        SpinLockRelease(&GPCache.Lock);
+        SpinLockReleaseIrq(&GPCache.Lock, Flags);
         return FALSE;
     }
 
-    // Забираем страницу
     Victim->RefCount = 1;
     Victim->Flags |= PCACHE_FLAG_WRITEBACK;
 
-    // Убираем из всех списков
     ListDel(&Victim->HashNode);
     ListDel(&Victim->LruNode);
     if (Victim->Flags & PCACHE_FLAG_DIRTY) {
@@ -121,9 +116,8 @@ STATIC BOOL PCacheEvictOne(VOID) {
     GPCache.PageCount--;
     GPCache.EvictCount++;
 
-    SpinLockRelease(&GPCache.Lock);
+    SpinLockReleaseIrq(&GPCache.Lock, Flags);
 
-    // Пишем вне Lock
     if (WasDirty) {
         INT Rc = PCacheWriteDirect(Disk, Lba, Count, Victim->Data);
         if (Rc == SUCCESS) {
@@ -135,7 +129,6 @@ STATIC BOOL PCacheEvictOne(VOID) {
     return TRUE;
 }
 
-// Освобождает место до PageCount < MaxPages.
 STATIC INT PCacheEnsureRoom(VOID) {
     if (GPCache.MaxPages == 0) RETURN(NO_MEMORY);
 
@@ -144,7 +137,6 @@ STATIC INT PCacheEnsureRoom(VOID) {
 
     while (GPCache.PageCount >= GPCache.MaxPages) {
         if (!PCacheEvictOne()) {
-            // Не смогли вытеснить — все заняты
             if (GPCache.PageCount >= GPCache.MaxPages) {
                 RETURN(BUSY);
             }
@@ -163,8 +155,8 @@ STATIC PCachePage *PCacheGetPage(Disk *Disk, UINT64 Lba) {
 
     UINT32 Hash = PCacheHash(Disk, Lba);
 
-    // 1. Ищем в кэше
-    SpinLockAcquire(&GPCache.Lock);
+    // 1. Look in the cache
+    UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
 
     ListHead *Pos;
     ListForEach(Pos, &GPCache.Hash[Hash]) {
@@ -173,20 +165,20 @@ STATIC PCachePage *PCacheGetPage(Disk *Disk, UINT64 Lba) {
             Page->RefCount++;
             PCacheLruTouch(Page);
             GPCache.HitCount++;
-            SpinLockRelease(&GPCache.Lock);
+            SpinLockReleaseIrq(&GPCache.Lock, Flags);
             return Page;
         }
     }
 
     GPCache.MissCount++;
-    SpinLockRelease(&GPCache.Lock);
+    SpinLockReleaseIrq(&GPCache.Lock, Flags);
 
-    // 2. Освобождаем место
+    // 2. Make room
     if (PCacheEnsureRoom() != SUCCESS) {
         return NULLPTR;
     }
 
-    // 3. Аллоцируем
+    // 3. Allocate
     PCachePage *New = PCacheAllocPage();
     if (!New) return NULLPTR;
 
@@ -194,23 +186,23 @@ STATIC PCachePage *PCacheGetPage(Disk *Disk, UINT64 Lba) {
     New->Lba = Lba;
     New->SectorCount = PCACHE_PAGE_SIZE / Disk->SectorSize;
 
-    // 4. Читаем с диска (вне Lock)
+    // 4. Read from disk (outside the lock)
     INT Rc = PCacheReadDirect(Disk, Lba, New->SectorCount, New->Data);
     if (Rc != SUCCESS) {
         PCacheFreePage(New);
         return NULLPTR;
     }
 
-    // 5. Вставляем в кэш
-    SpinLockAcquire(&GPCache.Lock);
+    // 5. Insert into the cache
+    Flags = SpinLockAcquireIrq(&GPCache.Lock);
 
-    // Проверяем ещё раз — может кто-то вставил, пока мы читали
+    // Check again — someone may have inserted it while we were reading
     ListForEach(Pos, &GPCache.Hash[Hash]) {
         PCachePage *Page = ListEntry(Pos, PCachePage, HashNode);
         if (Page->Disk == Disk && Page->Lba == Lba) {
             Page->RefCount++;
             PCacheLruTouch(Page);
-            SpinLockRelease(&GPCache.Lock);
+            SpinLockReleaseIrq(&GPCache.Lock, Flags);
             PCacheFreePage(New);
             return Page;
         }
@@ -223,15 +215,15 @@ STATIC PCachePage *PCacheGetPage(Disk *Disk, UINT64 Lba) {
     New->LastAccess = TimerTicks();
     GPCache.PageCount++;
 
-    SpinLockRelease(&GPCache.Lock);
+    SpinLockReleaseIrq(&GPCache.Lock, Flags);
     return New;
 }
 
 STATIC VOID PCacheRelease(PCachePage *Page) {
     if (!Page) return;
-    SpinLockAcquire(&GPCache.Lock);
+    UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
     if (Page->RefCount > 0) Page->RefCount--;
-    SpinLockRelease(&GPCache.Lock);
+    SpinLockReleaseIrq(&GPCache.Lock, Flags);
 }
 
 // ============================================================================
@@ -259,7 +251,6 @@ INT PCacheRead(Disk *Disk, UINT64 Lba, UINT32 Count, VOID *Buf) {
 
         PCachePage *Page = PCacheGetPage(Disk, PageLba);
         if (!Page) {
-            // Fallback — читаем напрямую
             UINT64 CurLba = Cur / BytesPerSector;
             UINT32 Left = (UINT32)((EndByte - Cur) / BytesPerSector);
             UINT32 This = Left;
@@ -283,7 +274,8 @@ INT PCacheRead(Disk *Disk, UINT64 Lba, UINT32 Count, VOID *Buf) {
         Cur += Chunk;
     }
 
-    GPCache.ReadCount++;
+    // ReadCount — not critical, increment without the lock
+    __sync_fetch_and_add(&GPCache.ReadCount, 1);
     RETURN(SUCCESS);
 }
 
@@ -308,7 +300,6 @@ INT PCacheWrite(Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buf) {
 
         PCachePage *Page = PCacheGetPage(Disk, PageLba);
         if (!Page) {
-            // Fallback — пишем напрямую
             UINT64 CurLba = Cur / BytesPerSector;
             UINT32 Left = (UINT32)((EndByte - Cur) / BytesPerSector);
             UINT32 This = Left;
@@ -325,16 +316,18 @@ INT PCacheWrite(Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buf) {
         UINT32 Chunk = PCACHE_PAGE_SIZE - InPageOff;
         if (Chunk > (UINT32)(EndByte - Cur)) Chunk = (UINT32)(EndByte - Cur);
 
+        // TODO(SMP): data is written outside the lock. Another CPU reading
+        // the same page via a different LBA may see a partial write.
+        // For correctness, a per-page lock or writing under the global lock is needed.
         MemCpy(Page->Data + InPageOff, In, Chunk);
 
-        // Помечаем грязной
-        SpinLockAcquire(&GPCache.Lock);
+        UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
         if (!(Page->Flags & PCACHE_FLAG_DIRTY)) {
             Page->Flags |= PCACHE_FLAG_DIRTY;
             ListAdd(&GPCache.DirtyList, &Page->DirtyNode);
             GPCache.DirtyCount++;
         }
-        SpinLockRelease(&GPCache.Lock);
+        SpinLockReleaseIrq(&GPCache.Lock, Flags);
 
         PCacheRelease(Page);
 
@@ -342,7 +335,7 @@ INT PCacheWrite(Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buf) {
         Cur += Chunk;
     }
 
-    GPCache.WriteCount++;
+    __sync_fetch_and_add(&GPCache.WriteCount, 1);
     RETURN(SUCCESS);
 }
 
@@ -350,14 +343,13 @@ INT PCacheWrite(Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buf) {
 // FLUSH
 // ============================================================================
 
-// Внутренний: сбросить грязные страницы. Disk == NULLPTR → все диски.
 STATIC INT PCacheFlushInternal(Disk *Disk) {
     if (!GPCache.Initialized) RETURN(SUCCESS);
 
     INT Flushed = 0;
 
     for (INT Pass = 0; Pass < 2; Pass++) {
-        SpinLockAcquire(&GPCache.Lock);
+        UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
 
         ListHead *Pos, *Next;
         ListForEachSafe(Pos, Next, &GPCache.DirtyList) {
@@ -370,12 +362,12 @@ STATIC INT PCacheFlushInternal(Disk *Disk) {
             Page->RefCount = 1;
             Page->Flags |= PCACHE_FLAG_WRITEBACK;
 
-            SpinLockRelease(&GPCache.Lock);
+            SpinLockReleaseIrq(&GPCache.Lock, Flags);
 
             INT Rc = PCacheWriteDirect(Page->Disk, Page->Lba,
                                        Page->SectorCount, Page->Data);
 
-            SpinLockAcquire(&GPCache.Lock);
+            Flags = SpinLockAcquireIrq(&GPCache.Lock);
 
             if (Rc == SUCCESS) {
                 Page->Flags &= ~(PCACHE_FLAG_DIRTY | PCACHE_FLAG_WRITEBACK);
@@ -389,7 +381,7 @@ STATIC INT PCacheFlushInternal(Disk *Disk) {
             Page->RefCount = 0;
         }
 
-        SpinLockRelease(&GPCache.Lock);
+        SpinLockReleaseIrq(&GPCache.Lock, Flags);
 
         if (GPCache.DirtyCount == 0) break;
     }
@@ -421,7 +413,7 @@ VOID PCacheInvalidate(Disk *Disk, UINT64 Lba, UINT32 Count) {
     UINT64 StartPage = (Lba / SectorsPerPage) * SectorsPerPage;
     UINT64 EndLba = Lba + Count;
 
-    SpinLockAcquire(&GPCache.Lock);
+    UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
 
     for (UINT64 Cur = StartPage; Cur < EndLba; Cur += SectorsPerPage) {
         UINT32 Hash = PCacheHash(Disk, Cur);
@@ -446,13 +438,13 @@ VOID PCacheInvalidate(Disk *Disk, UINT64 Lba, UINT32 Count) {
         }
     }
 
-    SpinLockRelease(&GPCache.Lock);
+    SpinLockReleaseIrq(&GPCache.Lock, Flags);
 }
 
 VOID PCacheInvalidateDisk(Disk *Disk) {
     if (!Disk || !GPCache.Initialized) return;
 
-    SpinLockAcquire(&GPCache.Lock);
+    UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
 
     ListHead *Pos, *Next;
     ListForEachSafe(Pos, Next, &GPCache.Lru) {
@@ -472,7 +464,7 @@ VOID PCacheInvalidateDisk(Disk *Disk) {
         PCacheFreePage(Page);
     }
 
-    SpinLockRelease(&GPCache.Lock);
+    SpinLockReleaseIrq(&GPCache.Lock, Flags);
 }
 
 // ============================================================================
@@ -480,14 +472,12 @@ VOID PCacheInvalidateDisk(Disk *Disk) {
 // ============================================================================
 
 STATIC VOID PCacheWritebackThread(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "pcache: writeback thread started\n");
-
     while (GPCache.WritebackRunning) {
         TimerSleep(PCACHE_WRITEBACK_MS);
         if (!GPCache.WritebackRunning) break;
 
         INT Flushed = 0;
-        SpinLockAcquire(&GPCache.Lock);
+        UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
 
         ListHead *Pos, *Next;
         ListForEachSafe(Pos, Next, &GPCache.DirtyList) {
@@ -500,10 +490,12 @@ STATIC VOID PCacheWritebackThread(VOID) {
             Page->RefCount = 1;
             Page->Flags |= PCACHE_FLAG_WRITEBACK;
 
-            SpinLockRelease(&GPCache.Lock);
+            SpinLockReleaseIrq(&GPCache.Lock, Flags);
+
             INT Rc = PCacheWriteDirect(Page->Disk, Page->Lba,
                                        Page->SectorCount, Page->Data);
-            SpinLockAcquire(&GPCache.Lock);
+
+            Flags = SpinLockAcquireIrq(&GPCache.Lock);
 
             if (Rc == SUCCESS) {
                 Page->Flags &= ~(PCACHE_FLAG_DIRTY | PCACHE_FLAG_WRITEBACK);
@@ -517,10 +509,8 @@ STATIC VOID PCacheWritebackThread(VOID) {
             Page->RefCount = 0;
         }
 
-        SpinLockRelease(&GPCache.Lock);
+        SpinLockReleaseIrq(&GPCache.Lock, Flags);
     }
-
-    BaseconPrintf(BASECON_TYPE_NORMAL, "pcache: writeback thread stopped\n");
     TaskExit(0);
 }
 
@@ -543,14 +533,14 @@ VOID PCacheInit(VOID) {
     GPCache.MaxPages = PCACHE_DEFAULT_PAGES;
     GPCache.Initialized = TRUE;
 
-    // Запускаем writeback
     GPCache.WritebackRunning = TRUE;
+
     INT Pid = TaskCreate(PCacheWritebackThread, KSTACK_SIZE, "pcache-wb");
     if (Pid < 0) {
-        GPCache.WritebackRunning = FALSE;
-        BaseconPrintf(BASECON_TYPE_WARNING, "pcache: failed to start writeback\n");
+    	GPCache.WritebackRunning = FALSE;
+    	BaseconPrintf(BASECON_TYPE_WARNING, "pcache: failed to start writeback\n");
     } else {
-        GPCache.WritebackPid = Pid;
+    	GPCache.WritebackPid = Pid;
     }
 
     BaseconPrintf(BASECON_TYPE_NORMAL, "pcache: initialized (%u pages, %u MB)\n",
@@ -564,7 +554,7 @@ VOID PCacheShutdown(VOID) {
     GPCache.WritebackRunning = FALSE;
     PCacheFlushAll();
 
-    SpinLockAcquire(&GPCache.Lock);
+    UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
     ListHead *Pos, *Next;
     ListForEachSafe(Pos, Next, &GPCache.Lru) {
         PCachePage *Page = ListEntry(Pos, PCachePage, LruNode);
@@ -574,7 +564,7 @@ VOID PCacheShutdown(VOID) {
     }
     GPCache.PageCount = 0;
     GPCache.DirtyCount = 0;
-    SpinLockRelease(&GPCache.Lock);
+    SpinLockReleaseIrq(&GPCache.Lock, Flags);
 
     GPCache.Initialized = FALSE;
 }
@@ -586,9 +576,9 @@ VOID PCacheShutdown(VOID) {
 VOID PCacheSetSize(UINT32 MaxPages) {
     if (MaxPages < PCACHE_MIN_PAGES) MaxPages = PCACHE_MIN_PAGES;
 
-    SpinLockAcquire(&GPCache.Lock);
+    UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
     GPCache.MaxPages = MaxPages;
-    SpinLockRelease(&GPCache.Lock);
+    SpinLockReleaseIrq(&GPCache.Lock, Flags);
 
     while (GPCache.PageCount > MaxPages) {
         if (!PCacheEvictOne()) break;
@@ -606,7 +596,7 @@ UINT32 PCacheGetSize(VOID) {
 VOID PCacheGetStats(UINT32 *Pages, UINT32 *Dirty, UINT32 *Max,
                     UINT64 *Hits, UINT64 *Misses,
                     UINT64 *Evicts, UINT64 *Writebacks) {
-    SpinLockAcquire(&GPCache.Lock);
+    UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
     if (Pages)      *Pages = GPCache.PageCount;
     if (Dirty)      *Dirty = GPCache.DirtyCount;
     if (Max)        *Max = GPCache.MaxPages;
@@ -614,16 +604,16 @@ VOID PCacheGetStats(UINT32 *Pages, UINT32 *Dirty, UINT32 *Max,
     if (Misses)     *Misses = GPCache.MissCount;
     if (Evicts)     *Evicts = GPCache.EvictCount;
     if (Writebacks) *Writebacks = GPCache.WritebackCount;
-    SpinLockRelease(&GPCache.Lock);
+    SpinLockReleaseIrq(&GPCache.Lock, Flags);
 }
 
 VOID PCacheResetStats(VOID) {
-    SpinLockAcquire(&GPCache.Lock);
+    UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
     GPCache.HitCount = 0;
     GPCache.MissCount = 0;
     GPCache.EvictCount = 0;
     GPCache.WritebackCount = 0;
     GPCache.ReadCount = 0;
     GPCache.WriteCount = 0;
-    SpinLockRelease(&GPCache.Lock);
+    SpinLockReleaseIrq(&GPCache.Lock, Flags);
 }

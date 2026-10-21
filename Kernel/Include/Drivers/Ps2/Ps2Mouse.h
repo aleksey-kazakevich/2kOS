@@ -113,3 +113,5 @@ INT Ps2MouseDispatchEvents(VOID);
 VOID Ps2MouseHandleIRQ(VOID);
 
 SysDevice *Ps2MouseRegisterSysDevice(VOID);
+
+VOID Ps2MouseHandleByte(UINT8 Byte);

@@ -96,12 +96,23 @@
 #define SATA_SCTL_PORT_IPM_NOSLUM    0x200
 #define SATA_SCTL_PORT_IPM_NODSLP    0x400
 
-#define SATA_ATA_CMD_READ_DMA_EX  0x25
-#define SATA_ATA_CMD_WRITE_DMA_EX 0x35
-#define SATA_ATA_CMD_IDENTIFY     0xEC
-#define SATA_ATA_DEV_BUSY         0x80
-#define SATA_ATA_DEV_DRQ          0x08
-#define SATA_ATA_DEV_ERR          0x01
+#define SATA_ATA_CMD_READ_DMA_EX      0x25
+#define SATA_ATA_CMD_WRITE_DMA_EX     0x35
+#define SATA_ATA_CMD_IDENTIFY         0xEC
+#define SATA_ATA_CMD_IDENTIFY_PACKET  0xA1   /* ATAPI */
+#define SATA_ATA_CMD_PACKET           0xA0   /* ATAPI */
+#define SATA_ATA_DEV_BUSY             0x80
+#define SATA_ATA_DEV_DRQ              0x08
+#define SATA_ATA_DEV_ERR              0x01
+
+/* SCSI opcodes (for ATAPI) */
+#define SCSI_TEST_UNIT_READY    0x00
+#define SCSI_REQUEST_SENSE      0x03
+#define SCSI_INQUIRY            0x12
+#define SCSI_START_STOP_UNIT    0x1B
+#define SCSI_READ_CAPACITY_10   0x25
+#define SCSI_READ_10            0x28
+#define SCSI_READ_12            0xA8
 
 typedef struct {
     UINT8 FisType;
@@ -240,7 +251,7 @@ typedef volatile struct {
 
 typedef struct {
     UINT8 Cfl : 5;
-    UINT8 A : 1;
+    UINT8 A : 1;         /* ← ATAPI flag */
     UINT8 W : 1;
     UINT8 P : 1;
     UINT8 R : 1;
@@ -266,7 +277,7 @@ typedef struct {
 
 typedef struct {
     UINT8 CFis[64];
-    UINT8 ACmd[16];
+    UINT8 ACmd[16];      /* ← ATAPI Command */
     UINT8 Rsv[48];
     HbaPrdtEntry PrdtEntry[1];
 } ATTRIBUTE(packed) HbaCmdTbl;
@@ -302,6 +313,18 @@ typedef struct SataPort {
     INT SupportsLba48;
     volatile UINT32 ErrorCount;
     INT PortNum;
+
+    /* --- ATAPI --- */
+    BOOL   IsAtapi;
+    UINT32 Sig;
+    UINT32 AtapiSectorSize;
+    BOOL   AtapiMediaPresent;
+    UINT8  AtapiSenseKey;
+    UINT8  AtapiAsc;
+    UINT8  AtapiAscq;
+    CHAR   AtapiVendor[9];
+    CHAR   AtapiProduct[17];
+    CHAR   AtapiRevision[5];
 } SataPort;
 
 INT SataInit(VOID);
@@ -309,3 +332,11 @@ INT SataPortRead(SataPort *Port, UINT64 Lba, UINT32 Count, VOID *Buffer);
 INT SataPortWrite(SataPort *Port, UINT64 Lba, UINT32 Count, const VOID *Buffer);
 SataPort *SataGetPort(INT PortNum);
 VOID SataIrqHandler(VOID);
+
+/* ATAPI */
+INT SataAtapiReadSectors(SataPort *Port, UINT64 Lba, UINT32 Count, VOID *Buffer);
+INT SataAtapiTestUnitReady(SataPort *Port);
+INT SataAtapiInquiry(SataPort *Port);
+INT SataAtapiReadCapacity(SataPort *Port);
+INT SataAtapiRequestSense(SataPort *Port);
+INT SataAtapiRescan(SataPort *Port);

@@ -33,3 +33,5 @@ EXTERN(VOID, IsrStub29());
 EXTERN(VOID, IsrStub30());
 EXTERN(VOID, IsrStub31());
 EXTERN(VOID, TimerIsr());
+EXTERN(VOID, IsrStubGeneric());
+EXTERN(VOID, IsrStubGenericError());

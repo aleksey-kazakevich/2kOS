@@ -116,6 +116,8 @@ INT AcpiGetOverrideForSource(UINT8 Source, AcpiIntOverride *Out);
 // Power management (minimal, kernel only)
 VOID AcpiReboot(VOID);
 VOID AcpiShutdown(VOID);
+// Sleep states: 1..4. Returns TRUE if sleep is initiated.
+BOOL AcpiSleep(UINT8 SleepState);
 
 SysDevice *AcpiGetSysDevice(VOID);
 SysDevice *AcpiRegisterSysDevices(VOID);
