@@ -1,3 +1,4 @@
+#include <Drivers/Irq/Apic/Apic.h>
 #include <Mem/Allocator.h>
 #include <Mem/PhysAlloc.h>
 #include <Time/Timer.h>
@@ -262,16 +263,24 @@ STATIC VOID SchedAccountCurrentLocked(Task *Cur, UINT64 NowTick) {
  * ============================================================================ */
 
 STATIC VOID IdleLoop(VOID) {
+    UINT64 GsBase = ReadMSR(0xC0000101);
+    if (GsBase < 0xffff800000000000ULL) {
+        BaseconPrintf(BASECON_TYPE_ERROR,
+                      "idle: bad %%gs on AP, gsbase=0x%llX\n", GsBase);
+        PerCpu *Fallback = PerCpuGetByLapicId(ApicGetId());
+        if (Fallback) {
+            WriteMSR(0xC0000101, (UINT64)(UINTPTR)Fallback);
+        } else {
+            for (;;) Halt();
+        }
+    }
     PerCpu *Self = TryGetPerCpu();
     for (;;) {
         if (Self) Self->Idle = TRUE;
         LocalInterruptsEnable();
-
-        /* Trying to steal a task */
         if (!SchedIdleBalance()) {
             Halt();
         }
-
         if (Self) Self->Idle = FALSE;
     }
 }
@@ -915,7 +924,7 @@ VOID ScheduleFromIsr(UINT64 *Regs, UINT64 **OutRegsPtr) {
     if (!Cur) {
         if (Self) {
             if (!Self->IdleTask) {
-                Fatal("ScheduleFromIsr: no idle for AP");
+                *OutRegsPtr = Regs;
                 return;
             }
             Self->CurrentTask = Self->IdleTask;
@@ -979,6 +988,10 @@ VOID ScheduleFromIsr(UINT64 *Regs, UINT64 **OutRegsPtr) {
     if (!Next) {
         if (P && P->IdleTask) {
             Next = P->IdleTask;
+            Next->State = TASK_RUNNING;
+        } else if (Self == NULLPTR) {
+            /* BSP before idle task */
+            Next = &InitTask;
             Next->State = TASK_RUNNING;
         } else {
             Next = &InitTask;

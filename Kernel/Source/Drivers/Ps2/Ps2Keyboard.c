@@ -213,7 +213,7 @@ STATIC BOOL Ps2KeyboardSendCommand(UINT8 Cmd);
 STATIC BOOL Ps2KeyboardReadDataWithTimeout(UINT8 *Data, INT TimeoutMs);
 STATIC VOID UpdateModifiers(UINT8 RawCode, BOOL Pressed);
 STATIC CHAR ScanCodeToAscii(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers);
-STATIC VOID ProcessKeyEvent(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers);
+STATIC VOID ProcessKeyEvent(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers, BOOL Extended);
 STATIC BOOL Ps2KeyboardDisable(VOID);
 STATIC BOOL Ps2KeyboardEnable(VOID);
 STATIC BOOL Ps2KeyboardReset(VOID);
@@ -372,26 +372,29 @@ STATIC VOID UpdateModifiers(UINT8 RawCode, BOOL Pressed) {
 STATIC CHAR ScanCodeToAscii(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers) {
     if (!Pressed) return 0;
     if (ScanCode >= 256) return 0;
-    
+
+    if (ScanCode >= 0x47 && ScanCode <= 0x53) {
+        if (!(Modifiers & MOD_NUMLOCK) && !(Modifiers & MOD_SHIFT)) {
+            return 0;
+        }
+    }
+
     const CHAR *Table = (Modifiers & MOD_SHIFT) ? GSet1Upper : GSet1Lower;
     CHAR Ascii = Table[ScanCode];
-    
     if (Ascii == 0) return 0;
-    
-    // CapsLock only affects letters
-    if ((Modifiers & MOD_CAPSLOCK) && (Ascii >= 'a' && Ascii <= 'z')) {
+
+    // CapsLock
+    if ((Modifiers & MOD_CAPSLOCK) && (Ascii >= 'a' && Ascii <= 'z'))
         Ascii = Ascii - 'a' + 'A';
-    } else if ((Modifiers & MOD_CAPSLOCK) && (Ascii >= 'A' && Ascii <= 'Z')) {
+    else if ((Modifiers & MOD_CAPSLOCK) && (Ascii >= 'A' && Ascii <= 'Z'))
         Ascii = Ascii - 'A' + 'a';
-    }
-    
-    // Ctrl + letter = control character
-    if ((Modifiers & MOD_CTRL) && (Ascii >= 'a' && Ascii <= 'z')) {
+
+    // Ctrl + letter → control char
+    if ((Modifiers & MOD_CTRL) && (Ascii >= 'a' && Ascii <= 'z'))
         Ascii = Ascii - 'a' + 1;
-    } else if ((Modifiers & MOD_CTRL) && (Ascii >= 'A' && Ascii <= 'Z')) {
+    else if ((Modifiers & MOD_CTRL) && (Ascii >= 'A' && Ascii <= 'Z'))
         Ascii = Ascii - 'A' + 1;
-    }
-    
+
     return Ascii;
 }
 
@@ -399,18 +402,20 @@ STATIC CHAR ScanCodeToAscii(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers) {
 // KEY EVENT PROCESSING
 // ============================================================================
 
-STATIC VOID ProcessKeyEvent(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers) {
+STATIC VOID ProcessKeyEvent(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers, BOOL Extended) {
     CHAR Ascii = 0;
     
     // Getting ASCII from the table
-    Ascii = ScanCodeToAscii(ScanCode, Pressed, Modifiers);
+    if (!Extended) {
+        Ascii = ScanCodeToAscii(ScanCode, Pressed, Modifiers);
+    }
     
     // Create event
     KeyEvent Event;
     Event.ScanCode = ScanCode;
     Event.Ascii = Ascii;
     Event.RawScanCode = ScanCode;
-    Event.Extended = FALSE;
+    Event.Extended = Extended;
     Event.State = Pressed ? KEY_STATE_PRESSED : KEY_STATE_RELEASED;
     Event.Modifiers = Modifiers;
     Event.Timestamp = TimerTicks();
@@ -443,7 +448,7 @@ VOID Ps2HandleScanByte(UINT8 Byte) {
     UpdateModifiers(RawCode, Pressed);
     
     // Processing the event
-    ProcessKeyEvent(RawCode, Pressed, GPs2.Modifiers);
+    ProcessKeyEvent(RawCode, Pressed, GPs2.Modifiers, Extended);
 }
 
 // ============================================================================

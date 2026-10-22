@@ -42,7 +42,7 @@ GeneralProtectionStub:
     pop %rcx
     pop %rax
 
-    add $8, %rsp      /* Removing error code*/
+    add $8, %rsp
     iretq
 
 .section .note.GNU-stack

@@ -5,6 +5,7 @@
 
 .global DivideErrorStub
 DivideErrorStub:
+    push $-1
     push %rax
     push %rcx
     push %rdx
@@ -22,9 +23,7 @@ DivideErrorStub:
     push %r15
 
     mov %rsp, %rdi
-    mov $0xFFFFFFFF, %rsi
-
-    call DivideErrorHandler   /* No arguments*/
+    call DivideErrorHandler
 
     pop %r15
     pop %r14
@@ -41,6 +40,7 @@ DivideErrorStub:
     pop %rdx
     pop %rcx
     pop %rax
+    add $8, %rsp
 
     iretq
 

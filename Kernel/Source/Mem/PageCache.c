@@ -3,6 +3,7 @@
 #include <Lib/String.h>
 #include <Time/Timer.h>
 #include <Scheduler.h>
+#include <SpinLock.h>
 #include <Basecon.h>
 #include <Asm/Cpu.h>
 #include <Return.h>
@@ -51,6 +52,14 @@ STATIC PCachePage *PCacheAllocPage(VOID) {
 
 STATIC VOID PCacheFreePage(PCachePage *Page) {
     if (Page) MemoryFree(Page);
+}
+
+STATIC UINTPTR PCachePageLock(PCachePage *Page) {
+    return SpinLockAcquireIrq(&Page->Lock);
+}
+
+STATIC VOID PCachePageUnlock(PCachePage *Page, UINTPTR Flags) {
+    SpinLockReleaseIrq(&Page->Lock, Flags);
 }
 
 // ============================================================================
@@ -267,7 +276,9 @@ INT PCacheRead(Disk *Disk, UINT64 Lba, UINT32 Count, VOID *Buf) {
         UINT32 Chunk = PCACHE_PAGE_SIZE - InPageOff;
         if (Chunk > (UINT32)(EndByte - Cur)) Chunk = (UINT32)(EndByte - Cur);
 
+	UINTPTR Pf = PCachePageLock(Page);
         MemCpy(Out, Page->Data + InPageOff, Chunk);
+	PCachePageUnlock(Page, Pf);
         PCacheRelease(Page);
 
         Out += Chunk;
@@ -316,9 +327,7 @@ INT PCacheWrite(Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buf) {
         UINT32 Chunk = PCACHE_PAGE_SIZE - InPageOff;
         if (Chunk > (UINT32)(EndByte - Cur)) Chunk = (UINT32)(EndByte - Cur);
 
-        // TODO(SMP): data is written outside the lock. Another CPU reading
-        // the same page via a different LBA may see a partial write.
-        // For correctness, a per-page lock or writing under the global lock is needed.
+	UINTPTR Pf = PCachePageLock(Page);
         MemCpy(Page->Data + InPageOff, In, Chunk);
 
         UINTPTR Flags = SpinLockAcquireIrq(&GPCache.Lock);
@@ -328,6 +337,7 @@ INT PCacheWrite(Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buf) {
             GPCache.DirtyCount++;
         }
         SpinLockReleaseIrq(&GPCache.Lock, Flags);
+	PCachePageUnlock(Page, Pf);
 
         PCacheRelease(Page);
 
@@ -364,8 +374,10 @@ STATIC INT PCacheFlushInternal(Disk *Disk) {
 
             SpinLockReleaseIrq(&GPCache.Lock, Flags);
 
+	    UINTPTR Pf = PCachePageLock(Page);
             INT Rc = PCacheWriteDirect(Page->Disk, Page->Lba,
                                        Page->SectorCount, Page->Data);
+	    PCachePageUnlock(Page, Pf);
 
             Flags = SpinLockAcquireIrq(&GPCache.Lock);
 

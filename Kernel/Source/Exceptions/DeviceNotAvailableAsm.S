@@ -5,6 +5,7 @@
 
 .global DeviceNotAvailableStub
 DeviceNotAvailableStub:
+    push $-1
     push %rax
     push %rcx
     push %rdx
@@ -22,8 +23,6 @@ DeviceNotAvailableStub:
     push %r15
 
     mov %rsp, %rdi
-    mov $0xFFFFFFFF, %rsi
-
     call DeviceNotAvailableHandler
 
     pop %r15
@@ -41,6 +40,7 @@ DeviceNotAvailableStub:
     pop %rdx
     pop %rcx
     pop %rax
+    add $8, %rsp
 
     iretq
 

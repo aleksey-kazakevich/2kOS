@@ -27,7 +27,7 @@
 
 extern VOID SyscallEntry(VOID);
 
-STATIC VOID SetupSyscall(VOID) {
+VOID SetupSyscall(VOID) {
     /* 1. Enabling SYSCALL/SYSRET via EFER.SCE */
     UINT64 Efer = ReadMSR(IA32_EFER);
     Efer |= EFER_SCE;

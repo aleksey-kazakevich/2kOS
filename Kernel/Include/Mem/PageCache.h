@@ -49,6 +49,8 @@ typedef struct PCachePage {
     volatile UINT32 Flags;
 
     UINT64    LastAccess;   // Ticks of the last access
+
+    SpinLock  Lock;
 } PCachePage;
 
 typedef struct {

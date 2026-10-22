@@ -5,6 +5,7 @@
 
 .global FpuErrorStub
 FpuErrorStub:
+    push $-1
     push %rax
     push %rcx
     push %rdx
@@ -21,9 +22,7 @@ FpuErrorStub:
     push %r14
     push %r15
 
-    mov %rsp, %rdi              # RDI = InterruptFrame pointer
-    mov $0xFFFFFFFF, %rsi       # RSI = "no error code" marker
-
+    mov %rsp, %rdi
     call FpuErrorHandler
 
     pop %r15
@@ -41,6 +40,7 @@ FpuErrorStub:
     pop %rdx
     pop %rcx
     pop %rax
+    add $8, %rsp
 
     iretq
 

@@ -5,6 +5,7 @@
 
 .global MachineCheckStub
 MachineCheckStub:
+    push $-1
     push %rax
     push %rcx
     push %rdx
@@ -22,8 +23,6 @@ MachineCheckStub:
     push %r15
 
     mov %rsp, %rdi
-    mov $0xFFFFFFFF, %rsi
-
     call MachineCheckHandler
 
     pop %r15
@@ -41,6 +40,7 @@ MachineCheckStub:
     pop %rdx
     pop %rcx
     pop %rax
+    add $8, %rsp
 
     iretq
 

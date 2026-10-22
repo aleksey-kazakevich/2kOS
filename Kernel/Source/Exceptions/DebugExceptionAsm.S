@@ -5,6 +5,7 @@
 
 .global DebugExceptionStub
 DebugExceptionStub:
+    push $-1
     push %rax
     push %rcx
     push %rdx
@@ -22,9 +23,7 @@ DebugExceptionStub:
     push %r15
 
     mov %rsp, %rdi
-    mov $0xFFFFFFFF, %rsi
-
-    call DebugExceptionHandler   /* No arguments*/
+    call DebugExceptionHandler
 
     pop %r15
     pop %r14
@@ -41,6 +40,7 @@ DebugExceptionStub:
     pop %rdx
     pop %rcx
     pop %rax
+    add $8, %rsp
 
     iretq
 

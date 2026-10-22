@@ -10,6 +10,22 @@
 #include <Basecon.h>
 #include <Return.h>
 
+#define PROT_NONE   0x0
+#define PROT_READ   0x1
+#define PROT_WRITE  0x2
+#define PROT_EXEC   0x4
+
+#define MAP_SHARED      0x01
+#define MAP_PRIVATE     0x02
+#define MAP_FIXED       0x10
+#define MAP_ANONYMOUS   0x20
+#define MAP_ANON        MAP_ANONYMOUS
+
+#define USER_MMAP_START   0x0000000010000000ULL
+#define USER_MMAP_MAX     0x00007F0000000000ULL
+
+#define MAP_FAILED   ((UINT64)-1)
+
 STATIC SyscallFunction GSyscallTable[SYSCALL_MAX] = {0};
 STATIC UINT32 GSyscallCount = 0;
 
@@ -239,6 +255,123 @@ STATIC UINT64 SysBrkHandler(UINT64 NewBrk) {
     return NewBrk;
 }
 
+STATIC UINT64 SysMmapHandler(UINT64 Addr, UINT64 Len, UINT64 Prot,
+                              UINT64 Flags, UINT64 Fd, UINT64 Off) {
+    (VOID)Fd;
+    (VOID)Off;
+
+    Task *Cur = GetCurrentTask();
+    if (!Cur || !Cur->IsUser || !Cur->PageTable) return (UINT64)-1;
+
+    if (Len == 0) return (UINT64)-1;
+
+    // Align
+    Len = (Len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    // Check flags
+    BOOL IsFixed = (Flags & MAP_FIXED) != 0;
+    BOOL IsAnon  = (Flags & MAP_ANONYMOUS) != 0;
+    if (!IsAnon) {
+        // file-backed not supported yet
+        return (UINT64)-1;
+    }
+
+    // Prot → PTE flags
+    UINT64 PteFlags = PTE_PRESENT | PTE_USER;
+    if (Prot & PROT_WRITE) PteFlags |= PTE_WRITABLE;
+    if (!(Prot & PROT_EXEC)) PteFlags |= PTE_NO_EXEC;
+
+    UINT64 Target = Addr;
+
+    if (!IsFixed) {
+        // Address hint or auto — ignore hint, use USER_MMAP_START
+        // Real mmap: search for free range. Simple: bump allocator from BrkMax.
+        // Use USER_MMAP_START and grow up.
+        Target = USER_MMAP_START;
+
+        // Search free range
+        for (UINT64 Va = USER_MMAP_START; Va < USER_MMAP_MAX; Va += PAGE_SIZE) {
+            BOOL Free = TRUE;
+            for (UINT64 Check = Va; Check < Va + Len; Check += PAGE_SIZE) {
+                if (PagingLookupVirt(Cur->PageTable, Check) != 0) {
+                    Free = FALSE;
+                    break;
+                }
+            }
+            if (Free) { Target = Va; break; }
+        }
+        if (Target == 0) return (UINT64)-1;
+    } else {
+        // MAP_FIXED — use exactly Addr
+        if (Addr == 0) return (UINT64)-1;
+        if ((Addr & (PAGE_SIZE - 1)) != 0) return (UINT64)-1;
+
+        // Unmap existing pages in range (mmap with MAP_FIXED replaces)
+        for (UINT64 Va = Addr; Va < Addr + Len; Va += PAGE_SIZE) {
+            UINT64 Phys = PagingLookupVirt(Cur->PageTable, Va);
+            if (Phys) {
+                PagingUnmapPage(Cur->PageTable, Va);
+                PhysAllocFreePage(PhysAllocGet(), (VOID*)(Phys & ~(PAGE_SIZE - 1)));
+            }
+        }
+    }
+
+    // Allocate + map
+    for (UINT64 Va = Target; Va < Target + Len; Va += PAGE_SIZE) {
+        VOID *Phys = PhysAllocAllocatePage(PhysAllocGet());
+        if (!Phys) {
+            // Rollback
+            for (UINT64 Back = Target; Back < Va; Back += PAGE_SIZE) {
+                UINT64 P = PagingLookupVirt(Cur->PageTable, Back);
+                if (P) {
+                    PagingUnmapPage(Cur->PageTable, Back);
+                    PhysAllocFreePage(PhysAllocGet(), (VOID*)(P & ~(PAGE_SIZE - 1)));
+                }
+            }
+            return (UINT64)-1;
+        }
+        MemSet((VOID*)PhysToVirt((UINT64)Phys), 0, PAGE_SIZE);
+        INT Rc = PagingMapPage(Cur->PageTable, Va, (UINT64)Phys, PteFlags);
+        if (Rc != SUCCESS) {
+            PhysAllocFreePage(PhysAllocGet(), Phys);
+            // Rollback
+            for (UINT64 Back = Target; Back < Va; Back += PAGE_SIZE) {
+                UINT64 P = PagingLookupVirt(Cur->PageTable, Back);
+                if (P) {
+                    PagingUnmapPage(Cur->PageTable, Back);
+                    PhysAllocFreePage(PhysAllocGet(), (VOID*)(P & ~(PAGE_SIZE - 1)));
+                }
+            }
+            return (UINT64)-1;
+        }
+    }
+
+    return Target;
+}
+
+STATIC UINT64 SysMunmapHandler(UINT64 Addr, UINT64 Len) {
+    Task *Cur = GetCurrentTask();
+    if (!Cur || !Cur->IsUser || !Cur->PageTable) return (UINT64)-1;
+
+    if (Len == 0) return (UINT64)-1;
+    if ((Addr & (PAGE_SIZE - 1)) != 0) return (UINT64)-1;
+
+    Len = (Len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    // Check bounds (user-space, not stack)
+    if (Addr < USER_CODE_VADDR) return (UINT64)-1;
+    if (Addr + Len > USER_STACK_TOP - USER_STACK_DEFAULT) return (UINT64)-1;
+
+    for (UINT64 Va = Addr; Va < Addr + Len; Va += PAGE_SIZE) {
+        UINT64 Phys = PagingLookupVirt(Cur->PageTable, Va);
+        if (Phys) {
+            PagingUnmapPage(Cur->PageTable, Va);
+            PhysAllocFreePage(PhysAllocGet(), (VOID*)(Phys & ~(PAGE_SIZE - 1)));
+        }
+    }
+    return 0;
+}
+
 INT SyscallRegister(UINT64 Num, SyscallFunction Func) {
     if (Num >= SYSCALL_MAX) return INCORRECT_VALUE;
     if (GSyscallTable[Num] != NULLPTR) return ALREADY_EXISTS;
@@ -254,6 +387,8 @@ STATIC VOID SyscallRegisterAll(VOID) {
     SyscallRegister(SYS_EXIT, (SyscallFunction)SysExitHandler);
     SyscallRegister(SYS_GETPID, (SyscallFunction)SysGetPidHandler);
     SyscallRegister(SYS_GETTICKS, (SyscallFunction)SysGetTicksHandler);
+    SyscallRegister(SYS_MMAP,   (SyscallFunction)SysMmapHandler);
+    SyscallRegister(SYS_MUNMAP, (SyscallFunction)SysMunmapHandler);
     
     BaseconPrintf(BASECON_TYPE_NORMAL, "syscall: %d handlers registered\n", GSyscallCount);
 }

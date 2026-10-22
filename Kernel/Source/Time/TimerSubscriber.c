@@ -82,39 +82,42 @@ INT TimerUnsubscribe(TimerSubscriber *Sub) {
 VOID TimerSubscriberTick(VOID) {
     if (!GInitialized) return;
     if (ListEmpty(&GSubscriberList)) return;
-    
-    SpinLockAcquire(&GSubscriberLock);
-    
+
+    // Собираем колбэки в локальный массив, НЕ вызывая их под локом
+    #define TSR_MAX 64
+    TimerCallback Cbs[TSR_MAX];
+    VOID *Uds[TSR_MAX];
+    UINT32 CbCount = 0;
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GSubscriberLock);
+
     ListHead *Pos, *Next;
     ListForEachSafe(Pos, Next, &GSubscriberList) {
         TimerSubscriber *Sub = ListEntry(Pos, TimerSubscriber, Node);
-        
+
         if (!Sub->Active) {
-            // Remove inactive ones
             ListDel(&Sub->Node);
             GSubscriberCount--;
             continue;
         }
-        
-        // Increment the counter
+
         Sub->Counter++;
-        
-        // Check whether the interval has been reached
         if (Sub->Counter >= Sub->Interval) {
             Sub->Counter = 0;
-            
-            // Call the callback (without the lock to avoid deadlocks)
-            SpinLockRelease(&GSubscriberLock);
-            
-            if (Sub->Callback) {
-                Sub->Callback(Sub->UserData);
+            if (CbCount < TSR_MAX) {
+                Cbs[CbCount] = Sub->Callback;
+                Uds[CbCount] = Sub->UserData;
+                CbCount++;
             }
-            
-            SpinLockAcquire(&GSubscriberLock);
         }
     }
-    
-    SpinLockRelease(&GSubscriberLock);
+
+    SpinLockReleaseIrq(&GSubscriberLock, Flags);
+
+    // Вне лока, вне ISR-контекста по локам
+    for (UINT32 I = 0; I < CbCount; I++) {
+        if (Cbs[I]) Cbs[I](Uds[I]);
+    }
 }
 
 UINT32 TimerSubscriberGetCount(VOID) {

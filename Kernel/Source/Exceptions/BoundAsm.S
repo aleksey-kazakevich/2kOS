@@ -5,6 +5,7 @@
 
 .global BoundStub
 BoundStub:
+    push $-1
     push %rax
     push %rcx
     push %rdx
@@ -22,8 +23,6 @@ BoundStub:
     push %r15
 
     mov %rsp, %rdi
-    mov $0xFFFFFFFF, %rsi
-
     call BoundHandler
 
     pop %r15
@@ -41,6 +40,7 @@ BoundStub:
     pop %rdx
     pop %rcx
     pop %rax
+    add $8, %rsp
 
     iretq
 

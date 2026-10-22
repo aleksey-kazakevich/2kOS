@@ -21,9 +21,65 @@
 
 STATIC volatile UINT32 GApStarted = 0;
 STATIC volatile BOOL   GSmpReady   = FALSE;
+volatile UINT32 GCpuStopRequested = 0;
+volatile UINT32 GCpuHaltedCount   = 0;
+volatile UINT32 GCpuTotalCount    = 1;
 
 extern struct IdtPtr Idtp;
 EXTERN(Timer, GTimer);
+
+VOID NmiStopHandler(VOID) {
+    __sync_fetch_and_add(&GCpuHaltedCount, 1);
+    asm volatile ("cli" ::: "memory");
+    for (;;) {
+        asm volatile ("hlt" ::: "memory");
+    }
+}
+
+STATIC VOID SmpSendNmiToAllButSelf(VOID) {
+    UINT64 ApicBase = ReadMSR(IA32_APIC_BASE_MSR);
+    BOOL X2 = (ApicBase & APIC_BASE_X2APIC) != 0;
+
+    if (X2) {
+        // x2APIC ICR: delivery=NMI(100b), shorthand=ALL_BUT_SELF(11b)
+        UINT64 Icr = (4ULL << 8) | (3ULL << 18);
+        WriteMSR(X2APIC_MSR_ICR, Icr);
+        for (INT I = 0; I < 1000000; I++) {
+            UINT64 V = ReadMSR(X2APIC_MSR_ICR);
+            if (!(V & ICR_DELIVERY_PENDING)) break;
+            CpuPause();
+        }
+    } else {
+        ApicWriteReg(LAPIC_ICR_HIGH, 0);
+        ApicWriteReg(LAPIC_ICR_LOW, (4 << 8) | (3 << 18));
+        for (INT I = 0; I < 1000000; I++) {
+            UINT32 V = ApicReadReg(LAPIC_ICR_LOW);
+            if (!(V & ICR_DELIVERY_PENDING)) break;
+            CpuPause();
+        }
+    }
+}
+
+VOID StopOtherCpus(VOID) {
+    if (__sync_lock_test_and_set(&GCpuStopRequested, 1)) return;
+
+    asm volatile ("cli" ::: "memory");
+
+    SmpSendNmiToAllButSelf();
+
+    UINT64 Start = ReadTimeStampCounter();
+    UINT64 Timeout = 2000000000ULL;
+    while (GCpuHaltedCount < GCpuTotalCount - 1) {
+        if (ReadTimeStampCounter() - Start > Timeout) break;
+        CpuPause();
+    }
+}
+
+VOID StopCpus(VOID) {
+    StopOtherCpus();
+    __sync_fetch_and_add(&GCpuHaltedCount, 1);
+    for (;;) asm volatile ("hlt" ::: "memory");
+}
 
 /* ============================================================================
  * RESCHED IPI
@@ -39,6 +95,16 @@ VOID SchedReschedIpiHandler(VOID) {
 }
 
 VOID ApEntry(struct limine_mp_info *Info) {
+    asm volatile("mov %0, %%cr3" : : "r"(VirtToPhys((UINT64)PagingGetKernelRoot())) : "memory");
+
+    UINT64 Cr0 = ReadCr0();
+    Cr0 &= ~(1ULL << 2); Cr0 |= (1ULL << 1); Cr0 &= ~(1ULL << 3);
+    WriteCr0(Cr0);
+    UINT64 Cr4 = ReadCr4();
+    Cr4 |= (1ULL << 9) | (1ULL << 10);
+    WriteCr4(Cr4);
+    asm volatile ("fninit");
+
     PerCpu *Self = PerCpuGetByLapicId(Info->lapic_id);
     if (!Self) {
         for (;;) Halt();
@@ -48,11 +114,17 @@ VOID ApEntry(struct limine_mp_info *Info) {
     WriteMSR(IA32_GS_BASE_MSR, (UINT64)(UINTPTR)Self);
     TssInitPerCpu(Self);
 
-    /* 2. IDT. */
+    /* 2. IDT & SYSCALL. */
     LoadIDT(&Idtp);
+    SetupSyscall();
 
     /* 3. The scheduler is up to the timer. Creates an IdleTask. */
     SchedulerInitPerCpu(Self->CpuIndex);
+
+    if (Self->IdleTask) {
+        Self->CurrentTask = Self->IdleTask;
+        Self->IdleTask->State = TASK_RUNNING;
+    }
 
     /* 4. APIC + timer. TimerIsr is now safe. */
     ApicEnable();
@@ -183,6 +255,10 @@ INT SmpInit(VOID) {
             CpuPause();
         }
     }
+
+    GCpuTotalCount = GCpuCount;
+    GCpuHaltedCount = 0;
+    GCpuStopRequested = 0;
 
     BaseconPrintf(BASECON_TYPE_SUCCESS,
                   "smp: %u/%u cpu(s) online\n",

@@ -38,6 +38,7 @@
 #include <Scheduler.h>
 #include <SysDevice.h>
 #include <Cmd/Echo.h>
+#include <Cmd/Copy.h>
 #include <Cmd/Read.h>
 #include <Cmd/ELog.h>
 #include <Cmd/SLog.h>

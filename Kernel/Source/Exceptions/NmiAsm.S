@@ -5,6 +5,7 @@
 
 .global NmiStub
 NmiStub:
+    push $-1
     push %rax
     push %rcx
     push %rdx
@@ -22,8 +23,6 @@ NmiStub:
     push %r15
 
     mov %rsp, %rdi
-    mov $0xFFFFFFFF, %rsi
-
     call NmiHandler
 
     pop %r15
@@ -41,6 +40,7 @@ NmiStub:
     pop %rdx
     pop %rcx
     pop %rax
+    add $8, %rsp
 
     iretq
 

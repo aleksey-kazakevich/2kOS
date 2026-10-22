@@ -41,6 +41,7 @@ InvalidTssStub:
     pop %rdx
     pop %rcx
     pop %rax
+    add $8, %rsp
 
     iretq
 

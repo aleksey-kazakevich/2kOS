@@ -24,7 +24,7 @@ DoubleFaultStub:
     mov %rsp, %rdi
     mov 120(%rsp), %rsi
 
-    call DoubleFaultHandler   /* No arguments*/
+    call DoubleFaultHandler
 
     pop %r15
     pop %r14
@@ -41,6 +41,7 @@ DoubleFaultStub:
     pop %rdx
     pop %rcx
     pop %rax
+    add $8, %rsp
 
     iretq
 

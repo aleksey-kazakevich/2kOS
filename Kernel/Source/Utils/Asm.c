@@ -667,6 +667,72 @@ STATIC BOOL ParseSource(AsmCtx *C, const CHAR *Src, USIZE Len) {
         const CHAR *P = SkipSpace(Line);
         if (!*P) continue;
 
+        const CHAR *Q = P;
+    	CHAR FirstTok[ASM_MAX_NAME_LEN];
+    	USIZE FT = 0;
+    	while (*Q && *Q != ' ' && *Q != '\t' && *Q != '=' && FT < ASM_MAX_NAME_LEN - 1)
+            FirstTok[FT++] = *Q++;
+    	FirstTok[FT] = '\0';
+    
+    	const CHAR *Rest = Q;
+    	BOOL HasColon = (FT > 0 && FirstTok[FT-1] == ':');
+    	if (HasColon) {
+            FirstTok[FT-1] = '\0';
+            FT--;
+    	}
+    
+    	Q = SkipSpace(Rest);
+    	BOOL IsEqu = FALSE;
+    	const CHAR *ValueStart = NULLPTR;
+    	if (StrnCmp(Q, "equ ", 4) == 0 || StrnCmp(Q, "EQU ", 4) == 0) {
+            IsEqu = TRUE;
+            ValueStart = SkipSpace(Q + 4);
+    	} else if (*Q == '=') {
+            IsEqu = TRUE;
+            ValueStart = SkipSpace(Q + 1);
+    	}
+    
+    	BOOL IsIdent = (FT > 0);
+    	for (USIZE K = 0; K < FT; K++) {
+            CHAR CC = FirstTok[K];
+            if (!((CC >= 'a' && CC <= 'z') || (CC >= 'A' && CC <= 'Z') ||
+              	(CC >= '0' && CC <= '9') || CC == '_' || CC == '.')) {
+            	IsIdent = FALSE;
+            	break;
+            }
+    	}
+    
+    	if (IsIdent && IsEqu && ValueStart && *ValueStart) {
+            CHAR ExprBuf[128];
+            USIZE EL = 0;
+            const CHAR *V = ValueStart;
+            while (*V && EL < sizeof(ExprBuf) - 1) ExprBuf[EL++] = *V++;
+            ExprBuf[EL] = '\0';
+            while (EL > 0 && (ExprBuf[EL-1] == ' ' || ExprBuf[EL-1] == '\t')) {
+            	ExprBuf[--EL] = '\0';
+            }
+
+            if (C->SymbolCount >= ASM_MAX_SYMBOLS) {
+            	SetErr(C, 0, "too many symbols");
+            	return FALSE;
+            }
+            AsmSym *S = FindSym(C, FirstTok);
+            if (!S) {
+            	S = &C->Symbols[C->SymbolCount++];
+            	MemSet(S, 0, sizeof(AsmSym));
+            	StrnCpy(S->Name, FirstTok, ASM_MAX_NAME_LEN - 1);
+            }
+            S->Defined = TRUE;
+            S->IsConstant = TRUE;
+            S->IsExpr = TRUE;
+            S->ConstValue = 0;
+            StrnCpy(S->Expr, ExprBuf, sizeof(S->Expr) - 1);
+            S->Section = 0;
+            S->Offset = C->Sections[C->CurrentSection].Size;   // $ at parse time
+        
+            continue;
+    	}
+
         // Label?
         CHAR Label[ASM_MAX_NAME_LEN];
         if (IsLabel(P, Label)) {
@@ -1174,6 +1240,23 @@ STATIC BOOL EncodeMov(AsmCtx *C, const AsmOp *Dst, const AsmOp *Src) {
         }
         return TRUE;
     }
+    if (Dst->Kind == OPK_REG && Src->Kind == OPK_LABEL) {
+        UINT8 Size = Dst->RegSize;
+        if (Size != 8) { SetErr(C, 0, "mov reg, label requires 64-bit reg"); return FALSE; }
+        
+        BOOL W = TRUE;
+        BOOL RR = (Dst->Reg >= 8);
+        
+        // lea r64, [rel label]  (RIP-relative)
+        if (W || RR) Emit8(C, MakeRex(W, RR, FALSE, FALSE));
+        Emit8(C, 0x8D);                     // LEA
+        Emit8(C, MakeModRm(0, Dst->Reg & 7, 5)); // Mod=00, R/M=101 (RIP-relative)
+        UINT32 DispOff = (UINT32)C->CodeSize;
+        Emit32(C, 0);
+        AddReloc(C, DispOff, Src->Label);   // relocation for RIP
+        
+        return TRUE;
+    }
     if (Dst->Kind == OPK_REG && Src->Kind == OPK_IMM) {
         UINT8 Size = Dst->RegSize;
         BOOL W = (Size == 8);
@@ -1617,7 +1700,7 @@ STATIC const CHAR *EvalTerm(AsmCtx *C, const CHAR *P, UINT64 CurOffset, UINT64 *
     }
     // $ — current offset
     else if (*P == '$') {
-        Val = CurOffset;
+        Val = C->Sections[C->CurrentSection].Vaddr + CurOffset;
         P++;
     }
     // Number

@@ -3,8 +3,13 @@
 #include <Types.h>
 #include <Fatal.h>
 
-VOID NmiHandler(InterruptFrame *Frame) {
-    FatalF("nmi", Frame);
+EXTERN(volatile UINT32, GCpuStopRequested);
+EXTERN(VOID, NmiStopHandler(VOID));
 
-    for (;;) Halt();
+VOID NmiHandler(InterruptFrame *Frame) {
+    if (GCpuStopRequested) {
+        NmiStopHandler();
+    }
+
+    FatalF("nmi", Frame);
 }

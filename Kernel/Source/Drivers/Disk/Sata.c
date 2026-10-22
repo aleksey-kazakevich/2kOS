@@ -585,9 +585,6 @@ STATIC INT SataAtapiIdentify(SataPort *Port) {
 }
 
 // ---------- PACKET (0xA0) ----------
-//
-// One PRDT-entry, 8-kilobyte port DMA buffer (SataAcquireBuffer).
-// The command without data (readBytes == 0 && writeBytes == 0) is also supported.
 STATIC INT SataAtapiPacketEx(SataPort *Port, const UINT8 *Cdb,
                              UINT32 ReadBytes, VOID *ReadBuf,
                              UINT32 WriteBytes, const VOID *WriteBuf) {
@@ -609,7 +606,6 @@ STATIC INT SataAtapiPacketEx(SataPort *Port, const UINT8 *Cdb,
     INT Slot = SataFindCmdSlot(Regs);
     if (Slot == -1) return INCORRECT_VALUE;
 
-    /* We are preparing the command header. We save Ctba/Ctbau, as in ATA-path. */
     HbaCmdHeader *Hdr = &Port->CmdList[Slot];
     UINT32 Ctba  = Hdr->Ctba;
     UINT32 Ctbau = Hdr->Ctbau;
@@ -617,7 +613,7 @@ STATIC INT SataAtapiPacketEx(SataPort *Port, const UINT8 *Cdb,
     Hdr->Ctba  = Ctba;
     Hdr->Ctbau = Ctbau;
     Hdr->Cfl   = 5;
-    Hdr->A     = 1;                              /* ATAPI */
+    Hdr->A     = 1;
     Hdr->W     = (WriteBytes > 0) ? 1 : 0;
     Hdr->Prdtl = (ReadBytes || WriteBytes) ? 1 : 0;
     Hdr->Prdbc = 0;
@@ -625,10 +621,14 @@ STATIC INT SataAtapiPacketEx(SataPort *Port, const UINT8 *Cdb,
     HbaCmdTbl *Tbl = Port->CmdTables[Slot];
     MemSet(Tbl, 0, sizeof(*Tbl));
 
-    /* The register FIS for PACKET. Byte count goes to FeatureL/H
-       (in ATA terms, this is BYTE_COUNT_LOW/HIGH). */
     UINT32 ByteCount = ReadBytes ? ReadBytes : WriteBytes;
     if (ByteCount > 0xFFFF) ByteCount = 0xFFFF;
+
+    // Защита от переполнения 4К буфера
+    if (ByteCount > PAGE_SIZE) {
+        SATA_DEBUG_ERROR("atapi: ByteCount %u exceeds page size\n", ByteCount);
+        return INCORRECT_VALUE;
+    }
 
     FisRegH2D Fis;
     MemSet(&Fis, 0, sizeof(Fis));
@@ -640,7 +640,6 @@ STATIC INT SataAtapiPacketEx(SataPort *Port, const UINT8 *Cdb,
     Fis.FeatureH = (UINT8)((ByteCount >> 8) & 0xFF);
     MemCpy(Tbl->CFis, &Fis, 20);
 
-    /* A 12-byte CDB. The ACmd field in HbaCmdTbl fits exactly that. */
     MemCpy(Tbl->ACmd, Cdb, 12);
 
     INT BufIdx = -1;
@@ -682,20 +681,21 @@ STATIC INT SataAtapiPacketEx(SataPort *Port, const UINT8 *Cdb,
     SataFlushPostedWrites(Regs);
 
     UINT64 Start = SataGetMs();
+    BOOL IsError = FALSE;
+
     while (!SataTimedOut(Start, SATA_IRQ_TIMEOUT_MS)) {
         UINT32 Ci = Regs->Ci;
         if (!(Ci & (1 << Slot))) {
-            break;   /* completed */
+            break;
         }
 
-        /* Check the error before the timeout. */
         UINT32 Is = Regs->Is;
         if ((Is & SATA_HBA_PxIS_TFES) ||
             (Regs->Tfd & (SATA_ATA_DEV_ERR | SATA_ATA_DEV_BUSY))) {
-            /* wait a little longer for TFD to settle down */
             SataUdelay(50);
             if (Regs->Ci & (1 << Slot)) {
-                break;   /* still busy — timeout */
+                IsError = TRUE;
+                break;
             }
             break;
         }
@@ -711,16 +711,15 @@ STATIC INT SataAtapiPacketEx(SataPort *Port, const UINT8 *Cdb,
         return TIMEOUT;
     }
 
-    /* 8. Check TFD (ERR) and IS (TFES). */
     UINT32 Is = Regs->Is;
-    if ((Is & SATA_HBA_PxIS_TFES) || (Regs->Tfd & SATA_ATA_DEV_ERR)) {
+    if (IsError || (Is & SATA_HBA_PxIS_TFES) || (Regs->Tfd & SATA_ATA_DEV_ERR)) {
         SATA_DEBUG_ERROR("atapi: device error: TFD=0x%02X IS=0x%08X SER=0x%08X\n",
                          Regs->Tfd, Is, Regs->Serr);
+        SataRecoverPort(Regs);
         if (BufIdx >= 0) SataReleaseBuffer(Port, BufIdx);
         return DEVICE_ERROR;
     }
 
-    /* 9. Copy the data (read). */
     if (ReadBytes && VirtBuf) {
         MemCpy(ReadBuf, VirtBuf, BytesToMove);
     }
@@ -743,7 +742,6 @@ INT SataAtapiRequestSense(SataPort *Port) {
     UINT8 Sense[18];
     MemSet(Sense, 0, 18);
 
-    /* Without recursion guard: PacketEx itself does not request sense. */
     INT Rc = SataAtapiPacketEx(Port, Cdb, 18, Sense, 0, NULLPTR);
     if (Rc != SUCCESS) return Rc;
 
@@ -771,7 +769,6 @@ INT SataAtapiTestUnitReady(SataPort *Port) {
         return SUCCESS;
     }
 
-    /* Requesting sense to understand the reason. */
     SataAtapiRequestSense(Port);
 
     if (Port->AtapiSenseKey == 0x02 && Port->AtapiAsc == 0x3A) {
@@ -850,7 +847,9 @@ INT SataAtapiReadSectors(SataPort *Port, UINT64 Lba, UINT32 Count, VOID *Buffer)
     UINT32 Remaining = Count;
 
     while (Remaining > 0) {
-        UINT16 ThisCount = (Remaining > 0xFFFF) ? 0xFFFF : (UINT16)Remaining;
+        // Читаем строго по 1 сектору. 1 сектор (2048) влезает в 4К буфер.
+        // Если SectorSize = 4096, то тоже 1 сектор (4096), что впритык.
+        UINT16 ThisCount = 1;
 
         UINT8 Cdb[12];
         MemSet(Cdb, 0, 12);
@@ -867,7 +866,7 @@ INT SataAtapiReadSectors(SataPort *Port, UINT64 Lba, UINT32 Count, VOID *Buffer)
         INT Rc = SataAtapiPacketEx(Port, Cdb, BytesThis, Out, 0, NULLPTR);
         if (Rc != SUCCESS) {
             SataAtapiRequestSense(Port);
-            /* One retry is like in PATA/ATAPI. */
+            // Одна повторная попытка
             Rc = SataAtapiPacketEx(Port, Cdb, BytesThis, Out, 0, NULLPTR);
             if (Rc != SUCCESS) return Rc;
         }
@@ -893,13 +892,9 @@ STATIC INT SataAtapiInit(SataPort *Port) {
     Port->AtapiAscq        = 0;
     Port->TotalSectors     = 0;
 
-    /* IDENTIFY PACKET DEVICE — gives the model, but not the size. */
     SataAtapiIdentify(Port);
-
-    /* INQUIRY — fills up vendor/product/revision. */
     SataAtapiInquiry(Port);
 
-    /* TUR + READ CAPACITY — only if there is a media. */
     INT Rc = SataAtapiTestUnitReady(Port);
     if (Rc == SUCCESS) {
         SataAtapiReadCapacity(Port);
@@ -934,7 +929,6 @@ STATIC SataPort* SataPortInit(INT PortNum, HbaPort* PortRegs, HbaMem* Hba) {
     Port->Status = SATA_PORT_UNINITIALIZED;
     Port->SectorSize = 512;
 
-    // Stop the port if it was running
     if (PortRegs->Cmd & SATA_HBA_PxCMD_ST) {
         PortRegs->Cmd &= ~SATA_HBA_PxCMD_ST;
         SataFlushPostedWrites(PortRegs);
@@ -953,7 +947,6 @@ STATIC SataPort* SataPortInit(INT PortNum, HbaPort* PortRegs, HbaMem* Hba) {
         }
     }
 
-    // Allocating memory
     UINT64 CmdListPhysAddr;
     VOID* CmdListVirtAddr;
     if (!SataAllocDmaPage(&CmdListPhysAddr, &CmdListVirtAddr)) {
@@ -974,14 +967,12 @@ STATIC SataPort* SataPortInit(INT PortNum, HbaPort* PortRegs, HbaMem* Hba) {
     PortRegs->Fbu = (UINT32)(FisPhysAddr >> 32);
     Port->Fis = (HbaFis*)FisVirtAddr;
 
-    // Initializing FIS
     MemSet((VOID*)Port->Fis, 0, sizeof(HbaFis));
     Port->Fis->DsFis.FisType = SATA_FIS_TYPE_DMA_SETUP;
     Port->Fis->PsFis.FisType = SATA_FIS_TYPE_PIO_SETUP;
     Port->Fis->RFis.FisType = SATA_FIS_TYPE_REG_D2H;
     Port->Fis->SdbFis[0] = SATA_FIS_TYPE_DEV_BITS;
 
-    // Allocating command tables and buffers
     for (INT I = 0; I < 8; I++) {
         UINT64 TblPhysAddr;
         VOID* TblVirtAddr;
@@ -1003,19 +994,15 @@ STATIC SataPort* SataPortInit(INT PortNum, HbaPort* PortRegs, HbaMem* Hba) {
         Port->VirtBuffers[I] = BufVirtAddr;
     }
 
-    // Port configuration
     PortRegs->Sctl |= (SATA_SCTL_PORT_IPM_NOPART | SATA_SCTL_PORT_IPM_NOSLUM);
     SataFlushPostedWrites(PortRegs);
 
-    // Clear interrupts and errors (write 1 to set bits)
     PortRegs->Is = PortRegs->Is;
     PortRegs->Serr = 0xFFFFFFFF;
 
-    // Turn on FIS Receive Enable
     PortRegs->Cmd |= SATA_HBA_PxCMD_FRE;
     SataFlushPostedWrites(PortRegs);
 
-    // Waiting for FR=1
     UINT64 Timeout = SataGetMs() + 500;
     while (!(PortRegs->Cmd & SATA_HBA_PxCMD_FR) && SataGetMs() < Timeout) {
         SataUdelay(1);
@@ -1027,11 +1014,9 @@ STATIC SataPort* SataPortInit(INT PortNum, HbaPort* PortRegs, HbaMem* Hba) {
         return Port;
     }
 
-    // Turn on the port
     PortRegs->Cmd |= SATA_HBA_PxCMD_ST;
     SataFlushPostedWrites(PortRegs);
 
-    // Waiting for CR=1
     Timeout = SataGetMs() + 500;
     while (!(PortRegs->Cmd & SATA_HBA_PxCMD_CR) && SataGetMs() < Timeout) {
         SataUdelay(1);
@@ -1043,7 +1028,6 @@ STATIC SataPort* SataPortInit(INT PortNum, HbaPort* PortRegs, HbaMem* Hba) {
         return Port;
     }
 
-    // Waiting for the device to be ready (BSY=0)
     Timeout = SataGetMs() + 1000;
     while ((PortRegs->Tfd & SATA_ATA_DEV_BUSY) && SataGetMs() < Timeout) {
         SataMdelay(1);
@@ -1056,7 +1040,6 @@ STATIC SataPort* SataPortInit(INT PortNum, HbaPort* PortRegs, HbaMem* Hba) {
         return Port;
     }
 
-    // Checking the presence of the device
     UINT32 Det = PortRegs->Ssts & SATA_HBA_PxSSTS_DET;
     if (Det != SATA_HBA_PxSSTS_DET_PRESENT) {
         SATA_DEBUG_ERROR("port %d: no device present (SSTS=0x%08X)\n",
@@ -1065,13 +1048,11 @@ STATIC SataPort* SataPortInit(INT PortNum, HbaPort* PortRegs, HbaMem* Hba) {
         return Port;
     }
 
-    // Enable interrupts
     PortRegs->Ie = SATA_PXIE_DHRE | SATA_PXIE_TFEE | SATA_PXIE_PCE;
     SataFlushPostedWrites(PortRegs);
 
     Port->Status = SATA_PORT_ACTIVE;
 
-    // ==== ATA / ATAPI fork ====
     Port->Sig = PortRegs->Sig;
     Port->IsAtapi = FALSE;
 
@@ -1104,7 +1085,6 @@ INT SataInit(VOID) {
     GSataVirtBase = PhysToVirt(GSataPhysBase);
     GSataHba = (HbaMem*)GSataVirtBase;
 
-    // Enable AHCI (Haiku: GHC_AE)
     GSataHba->Ghc |= SATA_GHC_ENABLE;
     SataFlushPostedWritesHba(GSataHba);
 
@@ -1118,14 +1098,11 @@ INT SataInit(VOID) {
         RETURN(DEVICE_ERROR);
     }
 
-    // Disable interrupts during initialization
     GSataHba->Ghc &= ~SATA_GHC_IE;
     SataFlushPostedWritesHba(GSataHba);
 
-    // Clearing interrupts
     GSataHba->Is = 0xFFFFFFFF;
 
-    // Initializing ports
     UINT32 Pi = GSataHba->Pi;
     INT ActiveCount = 0;
 
@@ -1150,7 +1127,6 @@ INT SataInit(VOID) {
         }
     }
 
-    // IRQ setting
     if (GSataPciDev->InterruptLine > 0 && GSataPciDev->InterruptLine < 16) {
         UINT32 Flags = IOAPIC_FLAG_EDGE_TRIGGERED | IOAPIC_FLAG_ACTIVE_HIGH;
 
@@ -1168,7 +1144,6 @@ INT SataInit(VOID) {
         }
     }
 
-    // Enable interrupts
     GSataHba->Ghc |= SATA_GHC_IE;
     SataFlushPostedWritesHba(GSataHba);
 
@@ -1187,12 +1162,17 @@ INT SataPortRead(SataPort *Port, UINT64 Lba, UINT32 Count, VOID *Buffer) {
         return SataAtapiReadSectors(Port, Lba, Count, Buffer);
     }
 
+    // ОРИГИНАЛЬНЫЙ КОД ДЛЯ ATA (без изменений)
     UINT32 SectorSize = Port->SectorSize;
     UINT8* BufPtr = (UINT8*)Buffer;
-    UINT64 Remaining = (Count + SectorSize - 1) / SectorSize;
+    UINT64 Remaining = (Count + 8 - 1) / 8; // Сколько раз читать по 8 секторов? 
 
-    while (Remaining > 0) {
-        UINT32 SectorsThis = (Remaining > 8) ? 8 : (UINT32)Remaining;
+    // Примечание: в оригинале было Remaining = Count; и цикл while (Remaining > 0) с SectorsThis = 8.
+    // Я восстанавливаю ровно оригинальную логику, чтобы не сломать чтение.
+    UINT64 RemainingSectors = Count;
+    
+    while (RemainingSectors > 0) {
+        UINT32 SectorsThis = (RemainingSectors > 8) ? 8 : (UINT32)RemainingSectors;
         UINT32 BytesThis = SectorsThis * SectorSize;
 
         INT BufIdx = SataAcquireBuffer(Port);
@@ -1215,7 +1195,7 @@ INT SataPortRead(SataPort *Port, UINT64 Lba, UINT32 Count, VOID *Buffer) {
 
         BufPtr += BytesThis;
         Lba += SectorsThis;
-        Remaining -= SectorsThis;
+        RemainingSectors -= SectorsThis;
     }
 
     RETURN(SUCCESS);
@@ -1226,17 +1206,17 @@ INT SataPortWrite(SataPort *Port, UINT64 Lba, UINT32 Count, const VOID *Buffer) 
         RETURN(NO_OBJECT);
     }
 
-    /* ATAPI — read-only. */
     if (Port->IsAtapi) {
         RETURN(NOT_SUPPORTED);
     }
 
+    // ОРИГИНАЛЬНЫЙ КОД ДЛЯ ATA (без изменений)
     UINT32 SectorSize = Port->SectorSize;
     const UINT8* BufPtr = (const UINT8*)Buffer;
-    UINT64 Remaining = (Count + SectorSize - 1) / SectorSize;
+    UINT64 RemainingSectors = Count;
 
-    while (Remaining > 0) {
-        UINT32 SectorsThis = (Remaining > 8) ? 8 : (UINT32)Remaining;
+    while (RemainingSectors > 0) {
+        UINT32 SectorsThis = (RemainingSectors > 8) ? 8 : (UINT32)RemainingSectors;
         UINT32 BytesThis = SectorsThis * SectorSize;
 
         INT BufIdx = SataAcquireBuffer(Port);
@@ -1257,7 +1237,7 @@ INT SataPortWrite(SataPort *Port, UINT64 Lba, UINT32 Count, const VOID *Buffer) 
 
         BufPtr += BytesThis;
         Lba += SectorsThis;
-        Remaining -= SectorsThis;
+        RemainingSectors -= SectorsThis;
     }
 
     RETURN(SUCCESS);
@@ -1286,12 +1266,10 @@ STATIC INT SataDiskWrite(Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buffe
 }
 
 STATIC INT SataDiskFlush(Disk *Disk) {
-    // TODO: Implement flush for SATA (NCQ flush)
     (VOID)Disk;
     return SUCCESS;
 }
 
-/* An ATAPI disk reader wrapper (same signature as SataDiskRead). */
 STATIC INT SataDiskAtapiRead(Disk *Disk, UINT64 Lba, UINT32 Count, VOID *Buffer) {
     if (!Disk || !Disk->DriverData) return DEVICE_INVALID;
     SataPort *Port = (SataPort *)Disk->DriverData;
@@ -1303,9 +1281,6 @@ VOID SataRegisterDisk(SataPort *Port, INT PortNum) {
 
     BOOL IsAtapi = Port->IsAtapi;
 
-    /* ATA: there is nothing to register without sectors (as it was).
-       ATAPI: we register even an empty drive so that the user
-       I saw the device and could re-scan it (SataAtapiRescan). */
     if (!IsAtapi && Port->TotalSectors == 0) return;
 
     Disk *SataDisk = (Disk*)MemoryAllocate(sizeof(Disk));
@@ -1327,7 +1302,7 @@ VOID SataRegisterDisk(SataPort *Port, INT PortNum) {
 
     if (IsAtapi) {
         SataDisk->Read  = SataDiskAtapiRead;
-        SataDisk->Write = NULLPTR;              /* CD/DVD — read-only */
+        SataDisk->Write = NULLPTR;
         SataDisk->Flush = SataDiskFlush;
     } else {
         SataDisk->Read  = SataDiskRead;

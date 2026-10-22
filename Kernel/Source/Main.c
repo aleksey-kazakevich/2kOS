@@ -48,6 +48,7 @@ VOID InitCmds(VOID) {
     CmdSLogRegister();
     CmdHexDumpRegister();
     CmdSmpInfoRegister();
+    CmdCopyRegister();
 }
 
 VOID InitFs(VOID) {
@@ -69,6 +70,10 @@ VOID CheckBootFlags(VOID) {
 }
 
 VOID KMain(VOID) {
+    UINT64 Cr4 = ReadCr4();
+    Cr4 |= (1ULL << 9) | (1ULL << 10);
+    WriteCr4(Cr4);
+
     InitStackProtector();
     KDriverInit();
     MemoryInit();
@@ -100,11 +105,11 @@ VOID KMain(VOID) {
     CpuRegisterAllBackends();
     CpuInit();
 
-    SchedulerInit();
+    InitTimer();
 
     SmpInit();
 
-    InitTimer();
+    SchedulerInit();
 
     SyscallInit();
 

@@ -34,3 +34,4 @@ struct ATTRIBUTE(packed) IdtPtr {
 VOID IdtSetGate(UINT8 Num, VOID (*Handler)(), UINT16 Sel, UINT8 Flags, UINT8 Ist);
 VOID IdtInit(VOID);
 VOID InitIdt(VOID);
+VOID SetupSyscall(VOID);

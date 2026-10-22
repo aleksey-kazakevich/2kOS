@@ -177,6 +177,8 @@ STATIC UINT64 ElfSetupStack(UINT64 *Pml4,
 // PUBLIC: ElfLoad (from memory)
 // ============================================================================
 
+#define USER_CODE_VADDR_MIN  0x1000ULL
+
 INT ElfLoad(const VOID *Image, USIZE ImageSize,
             UINT64 **OutPageTable,
             UINT64 *OutEntry,
@@ -304,7 +306,7 @@ INT ElfLoadFromFile(VfsFile *File,
             PagingDestroyUserAddressSpace(Pml4);
             RETURN(INCORRECT_VALUE);
         }
-        if (Ph->PVaddr < USER_CODE_VADDR ||
+        if (Ph->PVaddr < USER_CODE_VADDR_MIN ||
             Ph->PVaddr + Ph->PMemsz >= USER_STACK_TOP) {
             PagingDestroyUserAddressSpace(Pml4);
             RETURN(INCORRECT_VALUE);

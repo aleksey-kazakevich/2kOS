@@ -5,6 +5,7 @@
 
 .global BreakpointStub
 BreakpointStub:
+    push $-1
     push %rax
     push %rcx
     push %rdx
@@ -22,8 +23,6 @@ BreakpointStub:
     push %r15
 
     mov %rsp, %rdi
-    mov $0xFFFFFFFF, %rsi
-
     call BreakpointHandler
 
     pop %r15
@@ -41,6 +40,7 @@ BreakpointStub:
     pop %rdx
     pop %rcx
     pop %rax
+    add $8, %rsp
 
     iretq
 
