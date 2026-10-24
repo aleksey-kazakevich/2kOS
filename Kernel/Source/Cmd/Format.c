@@ -1,26 +1,33 @@
 #include <Drivers/Disk/DiskMgr.h>
 #include <Mem/Allocator.h>
+#include <Io/StdWarn.h>
 #include <Lib/String.h>
 #include <Cmd/Format.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Lib/StdIo.h>
 #include <Fs/Exfat.h>
 #include <Fs/Fat32.h>
-#include <Basecon.h>
 #include <Return.h>
 
 STATIC VOID CmdFormatPrintHelp(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Usage: format <disk> <type>\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  disk   - Disk name (e.g., SATA0, IDE0)\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  type   - Filesystem type:\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "           exfat fat32\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Example:\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  format IDE0 exfat\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_WARNING, "WARNING: This will DESTROY ALL DATA on the disk!\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Usage: format <disk> <type>\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("  disk   - Disk or partition (e.g., SATA0, SATA0:2)\n");
+    StdOutPrintf("  type   - Filesystem type:\n");
+    StdOutPrintf("           exfat fat32\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Examples:\n");
+    StdOutPrintf("  format IDE0 exfat\n");
+    StdOutPrintf("\n");
+    StdWarnPrintf("WARNING: This will DESTROY ALL DATA on the disk!\n");
+    StdOutPrintf("\n");
+}
+
+STATIC BOOL FormatIsKnownFs(const CHAR *FsType) {
+    return StrCaseCmp(FsType, "exfat") == 0 ||
+           StrCaseCmp(FsType, "fat32") == 0;
 }
 
 INT CmdFormatHandler(INT ArgC, const CHAR *ArgV[]) {
@@ -31,7 +38,6 @@ INT CmdFormatHandler(INT ArgC, const CHAR *ArgV[]) {
     UINT64 SectorCount = 0;
     INT Result;
 
-    // Checking the arguments
     if (ArgC < 3) {
         CmdFormatPrintHelp();
         return 0;
@@ -40,17 +46,15 @@ INT CmdFormatHandler(INT ArgC, const CHAR *ArgV[]) {
     DiskName = ArgV[1];
     FsType = ArgV[2];
 
-    // Checking the FS type
-    if (StrCaseCmp(FsType, "exfat") != 0 &&
-        StrCaseCmp(FsType, "fat32") != 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Unsupported filesystem: %s\n", FsType);
-        BaseconPrintf(BASECON_TYPE_NORMAL, "Supported: exfat, fat32\n");
+    if (!FormatIsKnownFs(FsType)) {
+        StdErrPrintf("Unsupported filesystem: %s\n", FsType);
+        StdOutPrintf("Supported: exfat, fat32\n");
         return -1;
     }
 
-    // Looking for a disk
+    /* Disk or partition? Accept both "SATA0:2" and "SATA0p2". */
     Partition *Part = NULLPTR;
-    if (StrChr(DiskName, ':')) {
+    if (StrChr(DiskName, ':') || StrrChr(DiskName, 'p')) {
         Part = DiskMgrFindPartition(DiskName);
     }
 
@@ -65,46 +69,46 @@ INT CmdFormatHandler(INT ArgC, const CHAR *ArgV[]) {
     }
 
     if (!D) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Disk not found: %s\n", DiskName);
+        StdErrPrintf("Disk not found: %s\n", DiskName);
         return -1;
     }
 
-    // Checking if the disk is mounted.
-    CHAR CheckPath[64];
+    /* Refuse to format a mounted volume. */
+    CHAR CheckPath[80];
     SnPrintf(CheckPath, sizeof(CheckPath), "%s::/", D->Name);
     VfsInode *CheckRoot;
     if (VfsWalk(VfsRootInode, CheckPath, &CheckRoot) == 0) {
         VfsInodeUnref(CheckRoot);
-        BaseconPrintf(BASECON_TYPE_ERROR, "Drive %s is currently mounted!\n", D->Name);
-        BaseconPrintf(BASECON_TYPE_NORMAL, "Unmount it first: unmount %s\n", D->Name);
+        StdErrPrintf("Drive %s is currently mounted!\n", D->Name);
+        StdOutPrintf("Unmount it first: unmount %s\n", D->Name);
         return -1;
     }
 
-    // Formatting
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Formatting %s as %s...\n", D->Name, FsType);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "This may take a moment...\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Formatting %s as %s...\n", D->Name, FsType);
+    StdOutPrintf("This may take a moment...\n");
+    StdOutPrintf("\n");
 
     if (StrCaseCmp(FsType, "exfat") == 0) {
         Result = ExfatFormat(D, StartLba, SectorCount);
     } else if (StrCaseCmp(FsType, "fat32") == 0) {
         Result = Fat32Format(D, StartLba, SectorCount);
     } else {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Unsupported filesystem: %s\n", FsType);
+        StdErrPrintf("Unsupported filesystem: %s\n", FsType);
         return -1;
     }
 
-    if (Result != 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Format failed (error %d)\n", Result);
+    if (Result != SUCCESS) {
+        StdErrPrintf("Format failed (%d): %s\n",
+                     Result, ReturnCode2String(Result));
         return -1;
     }
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS, "\n");
-    BaseconPrintf(BASECON_TYPE_SUCCESS, "Format complete!\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "To mount the disk: mount %s\n", D->Name);
-    
+    StdOutPrintf("\n");
+    StdOutPrintf("Format complete!\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("To mount the disk: mount %s %s\n", D->Name, FsType);
+
     return 0;
 }
 

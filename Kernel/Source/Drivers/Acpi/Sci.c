@@ -6,10 +6,11 @@
 #include <Lib/String.h>
 #include <Mem/Paging.h>
 #include <Time/Timer.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <SpinLock.h>
 #include <Asm/Mmio.h>
 #include <Asm/Cpu.h>
-#include <Basecon.h>
 #include <Asm/Io.h>
 #include <Return.h>
 #include <Idt.h>
@@ -184,7 +185,7 @@ VOID AcpiSciEnable(VOID) {
     IoapicUnmaskIrq(GAcpiSci.Gsi);
     
     GAcpiSci.Enabled = TRUE;
-    BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: sci enabled (gsi=%d, vector=%d)\n", 
+    StdOutPrintf("acpi: sci enabled (gsi=%d, vector=%d)\n", 
                   GAcpiSci.Gsi, GAcpiSci.Vector);
 }
 
@@ -258,7 +259,7 @@ VOID AcpiSciHandler(VOID) {
     
     // Process event
     if (Status & ACPI_PM1_PWRBTN) {
-        BaseconPrintf(BASECON_TYPE_INFO, "acpi: power button pressed!\n");
+        StdOutPrintf("acpi: power button pressed!\n");
         AcpiShutdown();
     }
     
@@ -307,7 +308,7 @@ INT AcpiSciInit(VOID) {
     
     Acpi *AcpiObj = AcpiGet();
     if (!AcpiObj || !AcpiObj->Fadt) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "acpi: no FADT for SCI\n");
+        StdErrPrintf("acpi: no FADT for SCI\n");
         RETURN(NO_OBJECT);
     }
     
@@ -316,7 +317,7 @@ INT AcpiSciInit(VOID) {
     // Get GSI for SCI
     Gsi = Fadt->SciInt;
     if (Gsi == 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "acpi: SCI GSI is 0\n");
+        StdErrPrintf("acpi: SCI GSI is 0\n");
         RETURN(INCORRECT_VALUE);
     }
     
@@ -332,7 +333,7 @@ INT AcpiSciInit(VOID) {
     AcpiSciParseRegisters();
     
     if (!GAcpiSci.Pm1aStatus) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "acpi: no PM1a status register\n");
+        StdErrPrintf("acpi: no PM1a status register\n");
         RETURN(NO_OBJECT);
     }
     
@@ -342,7 +343,7 @@ INT AcpiSciInit(VOID) {
     // Setting IOAPIC
     Result = IoapicRedirectIrq(Gsi, GAcpiSci.Vector, ApicGetId(), Flags);
     if (Result != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "acpi: IOAPIC redirect failed\n");
+        StdErrPrintf("acpi: IOAPIC redirect failed\n");
         RETURN(Result);
     }
     
@@ -354,7 +355,7 @@ INT AcpiSciInit(VOID) {
     
     GAcpiSci.Initialized = TRUE;
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: sci initialized (gsi=%d, vector=%d)\n", 
+    StdOutPrintf("acpi: sci initialized (gsi=%d, vector=%d)\n", 
                   Gsi, GAcpiSci.Vector);
     
     RETURN(SUCCESS);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Errno.h>
+
 typedef void VOID;
 
 #define NULLPTR ((VOID *)0)
@@ -70,3 +72,5 @@ typedef UINT16 WCHAR;
 #define OffsetOf(TYPE, MEMBER) ((USIZE)&(((TYPE *)0)->MEMBER))
 #define ATTRIBUTE(Attr) __attribute__((Attr))
 #define EXTERN(Type, Symbol) extern Type Symbol
+
+#define SYSCALL_ERR(E)  ((UINT64)(INT64)(-(INT64)(E)))

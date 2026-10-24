@@ -5,9 +5,10 @@
 #include <Drivers/Ps2/Ps2.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Asm/Cpu.h>
 #include <KDriver.h>
-#include <Basecon.h>
 #include <Asm/Io.h>
 #include <Return.h>
 #include <Idt.h>
@@ -322,7 +323,7 @@ STATIC VOID Ps2KeyboardResetModifiers(VOID) {
     GPs2.Modifiers = 0;
     MemSet(GPs2.KeyStates, 0, sizeof(GPs2.KeyStates));
     GPs2.ExtendedPrefix = FALSE;
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: modifiers reset\n");
+    StdOutPrintf("ps2kbd: modifiers reset\n");
 }
 
 STATIC VOID UpdateModifiers(UINT8 RawCode, BOOL Pressed) {
@@ -366,6 +367,13 @@ STATIC VOID UpdateModifiers(UINT8 RawCode, BOOL Pressed) {
             }
             GPs2.KeyStates[RawCode] = Pressed;
             return;
+
+	case 0x5B:   /* LWin */
+	case 0x5C:   /* RWin */
+    	    if (Pressed) GPs2.Modifiers |= MOD_WIN;
+    	    else         GPs2.Modifiers &= ~MOD_WIN;
+    	    GPs2.KeyStates[RawCode] = Pressed;
+    	    return;
     }
 }
 
@@ -403,12 +411,7 @@ STATIC CHAR ScanCodeToAscii(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers) {
 // ============================================================================
 
 STATIC VOID ProcessKeyEvent(UINT8 ScanCode, BOOL Pressed, UINT8 Modifiers, BOOL Extended) {
-    CHAR Ascii = 0;
-    
-    // Getting ASCII from the table
-    if (!Extended) {
-        Ascii = ScanCodeToAscii(ScanCode, Pressed, Modifiers);
-    }
+    CHAR Ascii = ScanCodeToAscii(ScanCode, Pressed, Modifiers);
     
     // Create event
     KeyEvent Event;
@@ -566,27 +569,27 @@ STATIC VOID Ps2KeyboardShutdown(KDriver *Driver) {
 // ============================================================================
 
 STATIC BOOL Ps2KeyboardDisable(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: disabling...\n");
+    StdOutPrintf("ps2kbd: disabling...\n");
     Ps2KeyboardFlushBuffer();
     TimerMdelay(5);
     return Ps2KeyboardSendCommand(0xF5);
 }
 
 STATIC BOOL Ps2KeyboardEnable(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: enabling...\n");
+    StdOutPrintf("ps2kbd: enabling...\n");
     Ps2KeyboardFlushBuffer();
     TimerMdelay(5);
     return Ps2KeyboardSendCommand(0xF4);
 }
 
 STATIC BOOL Ps2KeyboardReset(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: resetting...\n");
+    StdOutPrintf("ps2kbd: resetting...\n");
     
     Ps2KeyboardFlushBuffer();
     TimerMdelay(10);
     
     if (!Ps2KeyboardSendCommand(0xFF)) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: reset command failed\n");
+        StdErrPrintf("ps2kbd: reset command failed\n");
         return FALSE;
     }
     
@@ -608,7 +611,7 @@ STATIC BOOL Ps2KeyboardReset(VOID) {
     }
     
     if (!GotBat) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: BAT timeout\n");
+        StdErrPrintf("ps2kbd: BAT timeout\n");
         return FALSE;
     }
     
@@ -616,17 +619,17 @@ STATIC BOOL Ps2KeyboardReset(VOID) {
     Ps2KeyboardFlushBuffer();
     Ps2KeyboardResetModifiers();
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: reset complete\n");
+    StdOutPrintf("ps2kbd: reset complete\n");
     return TRUE;
 }
 
 STATIC UINT8 Ps2KeyboardQueryScanCodeSet(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: querying scancode set...\n");
+    StdOutPrintf("ps2kbd: querying scancode set...\n");
     Ps2KeyboardFlushBuffer();
     TimerMdelay(5);
     
     if (!Ps2KeyboardSendCommand(0xF0)) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: query command failed\n");
+        StdErrPrintf("ps2kbd: query command failed\n");
         return 0;
     }
     
@@ -636,22 +639,22 @@ STATIC UINT8 Ps2KeyboardQueryScanCodeSet(VOID) {
     
     UINT8 Response = 0;
     if (!Ps2KeyboardReadDataWithTimeout(&Response, 200)) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: query response timeout\n");
+        StdErrPrintf("ps2kbd: query response timeout\n");
         return 0;
     }
     
     UINT8 SetId = 0;
     if (!Ps2KeyboardReadDataWithTimeout(&SetId, 200)) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: query set id timeout\n");
+        StdErrPrintf("ps2kbd: query set id timeout\n");
         return 0;
     }
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: scancode set ID = 0x%02X\n", SetId);
+    StdOutPrintf("ps2kbd: scancode set ID = 0x%02X\n", SetId);
     return SetId;
 }
 
 STATIC BOOL Ps2KeyboardSetScanCodeSet(UINT8 Set) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: setting scancode set to %d...\n", Set);
+    StdOutPrintf("ps2kbd: setting scancode set to %d...\n", Set);
     Ps2KeyboardFlushBuffer();
     TimerMdelay(5);
     
@@ -663,7 +666,7 @@ STATIC BOOL Ps2KeyboardSetScanCodeSet(UINT8 Set) {
     
     UINT8 Response = 0;
     if (!Ps2KeyboardReadDataWithTimeout(&Response, 200)) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: set scancode timeout\n");
+        StdErrPrintf("ps2kbd: set scancode timeout\n");
         return FALSE;
     }
     
@@ -684,16 +687,16 @@ INT Ps2KeyboardInit(VOID) {
         RETURN(SUCCESS);
     }
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: initializing...\n");
+    StdOutPrintf("ps2kbd: initializing...\n");
     
     Ps2Controller *Ctrl = Ps2GetController();
     if (!Ctrl || !Ctrl->Initialized) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: controller not initialized!\n");
+        StdErrPrintf("ps2kbd: controller not initialized!\n");
         RETURN(NO_OBJECT);
     }
     
     if (!Ctrl->Port1.Present) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: port 1 not present!\n");
+        StdErrPrintf("ps2kbd: port 1 not present!\n");
         RETURN(NO_OBJECT);
     }
     
@@ -704,7 +707,7 @@ INT Ps2KeyboardInit(VOID) {
     
     TimerMdelay(100);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: disabling translation for setup...\n");
+    StdOutPrintf("ps2kbd: disabling translation for setup...\n");
     UINT8 Config = Ps2ReadWithCommand(PS2_CMD_READ_CONFIG);
     Config &= ~PS2_CONFIG_PORT1_TRANS;
     Ps2WriteWithCommand(PS2_CMD_WRITE_CONFIG, Config);
@@ -712,37 +715,37 @@ INT Ps2KeyboardInit(VOID) {
     
     // Disable the keyboard
     if (!Ps2KeyboardDisable()) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: disable failed (continuing)\n");
+        StdOutPrintf("ps2kbd: disable failed (continuing)\n");
     }
     TimerMdelay(20);
     
     // Reset keyboard
     if (!Ps2KeyboardReset()) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: reset failed!\n");
+        StdErrPrintf("ps2kbd: reset failed!\n");
         RETURN(DEVICE_ERROR);
     }
     TimerMdelay(50);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: reset OK\n");
+    StdOutPrintf("ps2kbd: reset OK\n");
     
     // INSTALL SET 2
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: setting keyboard to Set 2...\n");
+    StdOutPrintf("ps2kbd: setting keyboard to Set 2...\n");
     if (!Ps2KeyboardSetScanCodeSet(2)) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: failed to set Set 2!\n");
+        StdErrPrintf("ps2kbd: failed to set Set 2!\n");
         RETURN(DEVICE_ERROR);
     }
     TimerMdelay(50);
     
     UINT8 Check = Ps2KeyboardQueryScanCodeSet();
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: scancode set = 0x%02X\n", Check);
+    StdOutPrintf("ps2kbd: scancode set = 0x%02X\n", Check);
     
     if (Check != 0x02 && Check != 0x42) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: keyboard not in Set 2!\n");
+        StdErrPrintf("ps2kbd: keyboard not in Set 2!\n");
         RETURN(DEVICE_ERROR);
     }
     
     TimerMdelay(20);
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: enabling hardware translation (Set 2 -> Set 1)...\n");
+    StdOutPrintf("ps2kbd: enabling hardware translation (Set 2 -> Set 1)...\n");
     Config = Ps2ReadWithCommand(PS2_CMD_READ_CONFIG);
     Config |= PS2_CONFIG_PORT1_TRANS;
     Ps2WriteWithCommand(PS2_CMD_WRITE_CONFIG, Config);
@@ -750,7 +753,7 @@ INT Ps2KeyboardInit(VOID) {
     
     // Enable keyboard
     if (!Ps2KeyboardEnable()) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: enable failed!\n");
+        StdErrPrintf("ps2kbd: enable failed!\n");
         RETURN(DEVICE_ERROR);
     }
     TimerMdelay(10);
@@ -758,9 +761,9 @@ INT Ps2KeyboardInit(VOID) {
     // Check final config
     Config = Ps2ReadWithCommand(PS2_CMD_READ_CONFIG);
     if (Config & PS2_CONFIG_PORT1_TRANS) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: hardware translation ENABLED (Set 1 mode)\n");
+        StdOutPrintf("ps2kbd: hardware translation ENABLED (Set 1 mode)\n");
     } else {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: hardware translation NOT enabled!\n");
+        StdErrPrintf("ps2kbd: hardware translation NOT enabled!\n");
     }
     
     GPs2.Enabled = TRUE;
@@ -784,7 +787,7 @@ INT Ps2KeyboardInit(VOID) {
     
     Result = IoapicRedirectIrq(Gsi, KEYBOARD, ApicGetId(), Flags);
     if (IsError(Result).IsError) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ps2kbd: ioapic redirect failed!\n");
+        StdErrPrintf("ps2kbd: ioapic redirect failed!\n");
         RETURN(INCORRECT_VALUE);
     }
     
@@ -792,8 +795,8 @@ INT Ps2KeyboardInit(VOID) {
 
     Ps2KeyboardRegisterSysDevice();
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: irq: gsi=%d, vector=%d\n", Gsi, KEYBOARD);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2kbd: initialized successfully! (Set 1 mode via hardware translation)\n");
+    StdOutPrintf("ps2kbd: irq: gsi=%d, vector=%d\n", Gsi, KEYBOARD);
+    StdOutPrintf("ps2kbd: initialized successfully! (Set 1 mode via hardware translation)\n");
     
     RETURN(SUCCESS);
 }
@@ -843,8 +846,7 @@ SysDevice *Ps2KeyboardRegisterSysDevice(VOID) {
         SysDeviceSetState(Dev, SYSDEV_STATE_ENABLED);
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "ps2kbd: registered KEYBOARD in SysDevice\n");
+    StdOutPrintf("ps2kbd: registered KEYBOARD in SysDevice\n");
 
     return Dev;
 }

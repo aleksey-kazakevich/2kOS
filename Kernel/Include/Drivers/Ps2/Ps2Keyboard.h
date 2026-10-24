@@ -20,6 +20,7 @@
 #define MOD_CAPSLOCK    0x08
 #define MOD_NUMLOCK     0x10
 #define MOD_SCROLLLOCK  0x20
+#define MOD_WIN         0x40
 
 // Key states
 #define KEY_STATE_PRESSED   1

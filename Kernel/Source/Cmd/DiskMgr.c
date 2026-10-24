@@ -1,11 +1,15 @@
 #include <Drivers/Disk/DiskMgr.h>
+#include <Drivers/Disk/IsoFile.h>
+#include <Limine/LimineParse.h>
 #include <Drivers/Disk/Pata.h>
 #include <Mem/Allocator.h>
 #include <Cmd/DiskMgr.h>
+#include <Fs/Iso9660.h>
 #include <Lib/String.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Lib/StdIo.h>
 #include <Fs/Vfs.h>
-#include <Basecon.h>
 #include <Return.h>
 
 /* ============================================================================
@@ -63,8 +67,7 @@ STATIC VOID CmdPrintDiskInfo(Disk *D) {
     CHAR SizeStr[32];
     CmdFormatSize(D->TotalSize, SizeStr, sizeof(SizeStr));
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  %-10s %-7s %-6s %-12s %-10llu %s\n",
+    StdOutPrintf("  %-10s %-7s %-6s %-12s %-10llu %s\n",
                   D->Name,
                   DiskTypeToString(D->Type),
                   DiskPartSchemeToString(D->PartScheme),
@@ -74,8 +77,7 @@ STATIC VOID CmdPrintDiskInfo(Disk *D) {
 
     /* DiskCfg-string */
     if (D->CfgValid || D->Alias[0] || D->IsRoot) {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "    cfg: id=%s alias='%s' is_root=%u%s\n",
+        StdOutPrintf("    cfg: id=%s alias='%s' is_root=%u%s\n",
                       D->CfgId[0] ? D->CfgId : "-",
                       D->Alias[0] ? D->Alias : "",
                       D->IsRoot ? 1 : 0,
@@ -92,8 +94,7 @@ STATIC VOID CmdPrintPartitionInfo(Partition *P) {
     const CHAR *TypeStr = PartitionTypeToString(P->Type);
 
     if (P->IsGpt) {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "  %-12s %-12s %-8s %-4s %s%s%s\n",
+        StdOutPrintf("  %-12s %-12s %-8s %-4s %s%s%s\n",
                       P->Name,
                       SizeStr,
                       TypeStr,
@@ -102,8 +103,7 @@ STATIC VOID CmdPrintPartitionInfo(Partition *P) {
                       P->Label[0] ? P->Label : "",
                       P->Label[0] ? "'" : "");
     } else {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "  %-12s %-12s %-8s 0x%02X %s\n",
+        StdOutPrintf("  %-12s %-12s %-8s 0x%02X %s\n",
                       P->Name,
                       SizeStr,
                       TypeStr,
@@ -113,8 +113,7 @@ STATIC VOID CmdPrintPartitionInfo(Partition *P) {
 
     /* DiskCfg-string */
     if (P->CfgValid || P->Alias[0] || P->IsRoot) {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "    cfg: id=%s alias='%s' is_root=%u%s\n",
+        StdOutPrintf("    cfg: id=%s alias='%s' is_root=%u%s\n",
                       P->CfgId[0] ? P->CfgId : "-",
                       P->Alias[0] ? P->Alias : "",
                       P->IsRoot ? 1 : 0,
@@ -127,16 +126,14 @@ STATIC VOID CmdPrintPartitionInfo(Partition *P) {
  * ============================================================================ */
 
 STATIC INT CmdDiskMgrList(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Available Disks:\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  NAME       TYPE    SCHEME SIZE         SECTORS    STATUS\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  ---------- ------- ------ ------------ ---------- ------\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Available Disks:\n");
+    StdOutPrintf("  NAME       TYPE    SCHEME SIZE         SECTORS    STATUS\n");
+    StdOutPrintf("  ---------- ------- ------ ------------ ---------- ------\n");
 
     Disk *D = DiskMgrGetFirst();
     if (!D) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  No disks found\n");
+        StdOutPrintf("  No disks found\n");
         return 0;
     }
 
@@ -145,9 +142,8 @@ STATIC INT CmdDiskMgrList(VOID) {
         D = DiskMgrGetNext(D);
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "Total: %u disk(s)\n", DiskMgrGetDiskCount());
+    StdOutPrintf("\n");
+    StdOutPrintf("Total: %u disk(s)\n", DiskMgrGetDiskCount());
     return 0;
 }
 
@@ -157,50 +153,50 @@ STATIC INT CmdDiskMgrList(VOID) {
 
 STATIC INT CmdDiskMgrInfo(const CHAR *DiskName) {
     if (!DiskName) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Usage: diskmgr info <disk>\n");
+        StdErrPrintf("Usage: diskmgr info <disk>\n");
         return -1;
     }
 
     Disk *D = DiskMgrFindDisk(DiskName);
     if (!D) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Disk not found: %s\n", DiskName);
+        StdErrPrintf("Disk not found: %s\n", DiskName);
         return -1;
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "=== Disk Information: %s ===\n", D->Name);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  Type:          %s\n", DiskTypeToString(D->Type));
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  Scheme:        %s\n",
+    StdOutPrintf("\n");
+    StdOutPrintf("=== Disk Information: %s ===\n", D->Name);
+    StdOutPrintf("  Type:          %s\n", DiskTypeToString(D->Type));
+    StdOutPrintf("  Scheme:        %s\n",
                   DiskPartSchemeToString(D->PartScheme));
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  Total Size:    %llu bytes\n", D->TotalSize);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  Sectors:       %llu\n", D->SectorCount);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  Sector Size:   %u bytes\n", D->SectorSize);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  Partitions:    %u (primary), %u (logical)\n",
+    StdOutPrintf("  Total Size:    %llu bytes\n", D->TotalSize);
+    StdOutPrintf("  Sectors:       %llu\n", D->SectorCount);
+    StdOutPrintf("  Sector Size:   %u bytes\n", D->SectorSize);
+    StdOutPrintf("  Partitions:    %u (primary), %u (logical)\n",
                   D->PartitionCount, D->LogicalCount);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  Initialized:   %s\n",
+    StdOutPrintf("  Initialized:   %s\n",
                   D->Initialized ? "Yes" : "No");
 
     if (D->PartScheme == DISK_PART_SCHEME_GPT) {
         CHAR GuidStr[40];
         CmdFormatGuid(D->DiskGuid, GuidStr, sizeof(GuidStr));
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  Disk GUID:     %s\n", GuidStr);
+        StdOutPrintf("  Disk GUID:     %s\n", GuidStr);
     }
 
     /* DiskCfg */
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n  === DiskCfg ===\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  id:            %s\n",
+    StdOutPrintf("\n  === DiskCfg ===\n");
+    StdOutPrintf("  id:            %s\n",
                   D->CfgId[0] ? D->CfgId : "(none)");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  alias:         %s\n",
+    StdOutPrintf("  alias:         %s\n",
                   D->Alias[0] ? D->Alias : "(none)");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  is_root:       %u\n", D->IsRoot ? 1 : 0);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  cfg_valid:     %u\n", D->CfgValid ? 1 : 0);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  cfg_stale:     %u\n", D->CfgStale ? 1 : 0);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  fs_kind:       %s\n",
+    StdOutPrintf("  is_root:       %u\n", D->IsRoot ? 1 : 0);
+    StdOutPrintf("  cfg_valid:     %u\n", D->CfgValid ? 1 : 0);
+    StdOutPrintf("  cfg_stale:     %u\n", D->CfgStale ? 1 : 0);
+    StdOutPrintf("  fs_kind:       %s\n",
                   D->CfgFsKind == DISKCFG_FS_FAT32 ? "FAT32" :
                   D->CfgFsKind == DISKCFG_FS_EXFAT ? "exFAT" :
                   D->CfgFsKind == DISKCFG_FS_ISO9660 ? "ISO9660" : "none");
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
     return 0;
 }
 
@@ -210,30 +206,26 @@ STATIC INT CmdDiskMgrInfo(const CHAR *DiskName) {
 
 STATIC INT CmdDiskMgrPartitions(const CHAR *DiskName) {
     if (!DiskName) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Usage: diskmgr parts <disk>\n");
+        StdErrPrintf("Usage: diskmgr parts <disk>\n");
         return -1;
     }
 
     Disk *D = DiskMgrFindDisk(DiskName);
     if (!D) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Disk not found: %s\n", DiskName);
+        StdErrPrintf("Disk not found: %s\n", DiskName);
         return -1;
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "=== Partitions on %s (%s) ===\n",
+    StdOutPrintf("\n");
+    StdOutPrintf("=== Partitions on %s (%s) ===\n",
                   D->Name, DiskPartSchemeToString(D->PartScheme));
 
     if (D->PartScheme == DISK_PART_SCHEME_GPT) {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "  NAME         SIZE         TYPE     KIND LABEL\n");
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "  ------------ ------------ -------- ---- -----\n");
+        StdOutPrintf("  NAME         SIZE         TYPE     KIND LABEL\n");
+        StdOutPrintf("  ------------ ------------ -------- ---- -----\n");
     } else {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "  NAME         SIZE         TYPE     ID   BOOT\n");
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "  ------------ ------------ -------- ---- ----\n");
+        StdOutPrintf("  NAME         SIZE         TYPE     ID   BOOT\n");
+        StdOutPrintf("  ------------ ------------ -------- ---- ----\n");
     }
 
     for (UINT32 I = 0; I < D->PartitionCount; I++) {
@@ -246,12 +238,11 @@ STATIC INT CmdDiskMgrPartitions(const CHAR *DiskName) {
     }
 
     if (D->PartitionCount == 0 && D->LogicalCount == 0) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  No partitions found\n");
+        StdOutPrintf("  No partitions found\n");
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "Total: %u partition(s)\n",
+    StdOutPrintf("\n");
+    StdOutPrintf("Total: %u partition(s)\n",
                   D->PartitionCount + D->LogicalCount);
     return 0;
 }
@@ -298,7 +289,7 @@ STATIC BOOL ParseGptType(const CHAR *Name, PartitionType *Out) {
 
 STATIC INT CmdDiskMgrInit(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 4) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Usage: diskmgr init <disk> <gpt|mbr>\n");
+        StdErrPrintf("Usage: diskmgr init <disk> <gpt|mbr>\n");
         return -1;
     }
 
@@ -307,37 +298,35 @@ STATIC INT CmdDiskMgrInit(INT ArgC, const CHAR *ArgV[]) {
 
     Disk *D = DiskMgrFindDisk(DiskName);
     if (!D) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Disk not found: %s\n", DiskName);
+        StdErrPrintf("Disk not found: %s\n", DiskName);
         return -1;
     }
 
     if (!D->Write) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "%s is read-only\n", D->Name);
+        StdErrPrintf("%s is read-only\n", D->Name);
         return -1;
     }
 
     INT Ret;
 
     if (StrCaseCmp(Scheme, "gpt") == 0) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "Initializing GPT on %s...\n", D->Name);
+        StdOutPrintf("Initializing GPT on %s...\n", D->Name);
         Ret = GptInitDisk(D);
         if (Ret != SUCCESS) {
-            BaseconPrintf(BASECON_TYPE_ERROR, "GPT init failed (%d)\n", Ret);
+            StdErrPrintf("GPT init failed (%d)\n", Ret);
             return -1;
         }
-        BaseconPrintf(BASECON_TYPE_SUCCESS, "GPT initialized on %s\n", D->Name);
+        StdOutPrintf("GPT initialized on %s\n", D->Name);
         return 0;
     }
 
     if (StrCaseCmp(Scheme, "mbr") == 0) {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "MBR init is implicit: just 'create' a partition.\n");
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "Use: diskmgr create %s <size_mb> <type>\n", D->Name);
+        StdOutPrintf("MBR init is implicit: just 'create' a partition.\n");
+        StdOutPrintf("Use: diskmgr create %s <size_mb> <type>\n", D->Name);
         return 0;
     }
 
-    BaseconPrintf(BASECON_TYPE_ERROR, "Unknown scheme: %s (use gpt or mbr)\n", Scheme);
+    StdErrPrintf("Unknown scheme: %s (use gpt or mbr)\n", Scheme);
     return -1;
 }
 
@@ -347,19 +336,16 @@ STATIC INT CmdDiskMgrInit(INT ArgC, const CHAR *ArgV[]) {
 
 STATIC INT CmdDiskMgrCreate(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 5) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "Usage: diskmgr create <disk> <size_mb> <type> [flags]\n");
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "  MBR: <type> = FAT32 | NTFS | Linux | EFI | SWAP | FAT16 | 0xNN\n");
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "  GPT: add '-gpt' and optional '-label <name>'\n");
+        StdErrPrintf("Usage: diskmgr create <disk> <size_mb> <type> [flags]\n");
+        StdOutPrintf("  MBR: <type> = FAT32 | NTFS | Linux | EFI | SWAP | FAT16 | 0xNN\n");
+        StdOutPrintf("  GPT: add '-gpt' and optional '-label <name>'\n");
         return -1;
     }
 
     const CHAR *DiskName = ArgV[2];
     INT SizeMBInt = AToI(ArgV[3]);
     if (SizeMBInt <= 0) {
-    	BaseconPrintf(BASECON_TYPE_ERROR, "Invalid size: %s\n", ArgV[3]);
+    	StdErrPrintf("Invalid size: %s\n", ArgV[3]);
     	return -1;
     }
     UINT64 SizeMB = (UINT64)SizeMBInt;
@@ -367,7 +353,7 @@ STATIC INT CmdDiskMgrCreate(INT ArgC, const CHAR *ArgV[]) {
 
     Disk *D = DiskMgrFindDisk(DiskName);
     if (!D) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Disk not found: %s\n", DiskName);
+        StdErrPrintf("Disk not found: %s\n", DiskName);
         return -1;
     }
 
@@ -395,25 +381,21 @@ STATIC INT CmdDiskMgrCreate(INT ArgC, const CHAR *ArgV[]) {
 
     UINT64 Sectors = (SizeMB * 1024 * 1024) / D->SectorSize;
     if (Sectors == 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Size too small\n");
+        StdErrPrintf("Size too small\n");
         return -1;
     }
 
     if (UseGpt) {
         if (D->PartScheme != DISK_PART_SCHEME_GPT) {
-            BaseconPrintf(BASECON_TYPE_ERROR,
-                          "%s is not initialized as GPT. Run:\n", D->Name);
-            BaseconPrintf(BASECON_TYPE_ERROR,
-                          "  diskmgr init %s gpt\n", D->Name);
+            StdErrPrintf("%s is not initialized as GPT. Run:\n", D->Name);
+            StdErrPrintf("  diskmgr init %s gpt\n", D->Name);
             return -1;
         }
 
         PartitionType GptType;
         if (!ParseGptType(TypeName, &GptType)) {
-            BaseconPrintf(BASECON_TYPE_ERROR,
-                          "Unknown GPT type: %s\n", TypeName);
-            BaseconPrintf(BASECON_TYPE_NORMAL,
-                          "Supported: FAT32 FAT16 NTFS Linux EXT4 EFI SWAP\n");
+            StdErrPrintf("Unknown GPT type: %s\n", TypeName);
+            StdOutPrintf("Supported: FAT32 FAT16 NTFS Linux EXT4 EFI SWAP\n");
             return -1;
         }
 
@@ -430,31 +412,29 @@ STATIC INT CmdDiskMgrCreate(INT ArgC, const CHAR *ArgV[]) {
         }
 
         if (StartLba + Sectors > D->SectorCount) {
-            BaseconPrintf(BASECON_TYPE_ERROR, "Not enough space\n");
+            StdErrPrintf("Not enough space\n");
             return -1;
         }
 
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "Creating GPT partition on %s: start=%llu, sectors=%llu, type=%s%s%s\n",
+        StdOutPrintf("Creating GPT partition on %s: start=%llu, sectors=%llu, type=%s%s%s\n",
                       D->Name, StartLba, Sectors, TypeName,
                       Label ? ", label='" : "",
                       Label ? Label : "");
 
         INT Ret = PartitionCreateGPT(D, StartLba, Sectors, GptType, Label);
         if (Ret != SUCCESS) {
-            BaseconPrintf(BASECON_TYPE_ERROR, "Failed to create GPT partition (%d)\n", Ret);
+            StdErrPrintf("Failed to create GPT partition (%d)\n", Ret);
             return -1;
         }
 
-        BaseconPrintf(BASECON_TYPE_SUCCESS, "GPT partition created\n");
+        StdOutPrintf("GPT partition created\n");
         return 0;
     }
 
     UINT8 MbrType;
     if (!ParseMbrType(TypeName, &MbrType)) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Unknown MBR type: %s\n", TypeName);
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "Supported: FAT32 FAT16 NTFS Linux EFI SWAP | 0xNN\n");
+        StdErrPrintf("Unknown MBR type: %s\n", TypeName);
+        StdOutPrintf("Supported: FAT32 FAT16 NTFS Linux EFI SWAP | 0xNN\n");
         return -1;
     }
 
@@ -467,21 +447,20 @@ STATIC INT CmdDiskMgrCreate(INT ArgC, const CHAR *ArgV[]) {
     }
 
     if (StartLba + Sectors > D->SectorCount) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Not enough space\n");
+        StdErrPrintf("Not enough space\n");
         return -1;
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "Creating MBR partition on %s: start=%llu, sectors=%llu, type=%s (0x%02X)\n",
+    StdOutPrintf("Creating MBR partition on %s: start=%llu, sectors=%llu, type=%s (0x%02X)\n",
                   D->Name, StartLba, Sectors, TypeName, MbrType);
 
     INT Ret = PartitionCreateMBR(D, StartLba, Sectors, MbrType);
     if (Ret != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Failed to create MBR partition (%d)\n", Ret);
+        StdErrPrintf("Failed to create MBR partition (%d)\n", Ret);
         return -1;
     }
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS, "MBR partition created\n");
+    StdOutPrintf("MBR partition created\n");
     return 0;
 }
 
@@ -491,8 +470,7 @@ STATIC INT CmdDiskMgrCreate(INT ArgC, const CHAR *ArgV[]) {
 
 STATIC INT CmdDiskMgrDelete(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 4) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "Usage: diskmgr delete <disk> <partition_index>\n");
+        StdErrPrintf("Usage: diskmgr delete <disk> <partition_index>\n");
         return -1;
     }
 
@@ -501,17 +479,16 @@ STATIC INT CmdDiskMgrDelete(INT ArgC, const CHAR *ArgV[]) {
 
     Disk *D = DiskMgrFindDisk(DiskName);
     if (!D) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Disk not found: %s\n", DiskName);
+        StdErrPrintf("Disk not found: %s\n", DiskName);
         return -1;
     }
 
     if (PartIndex == 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Partition index must be >= 1\n");
+        StdErrPrintf("Partition index must be >= 1\n");
         return -1;
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "Deleting partition %u from %s (%s)...\n",
+    StdOutPrintf("Deleting partition %u from %s (%s)...\n",
                   PartIndex, D->Name,
                   DiskPartSchemeToString(D->PartScheme));
 
@@ -521,19 +498,18 @@ STATIC INT CmdDiskMgrDelete(INT ArgC, const CHAR *ArgV[]) {
         Ret = PartitionDeleteGPT(D, PartIndex);
     } else {
         if (PartIndex > 4) {
-            BaseconPrintf(BASECON_TYPE_ERROR,
-                          "MBR supports only 1-4\n");
+            StdErrPrintf("MBR supports only 1-4\n");
             return -1;
         }
         Ret = PartitionDeleteMBR(D, PartIndex);
     }
 
     if (Ret != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Failed to delete partition (%d)\n", Ret);
+        StdErrPrintf("Failed to delete partition (%d)\n", Ret);
         return -1;
     }
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS, "Partition deleted\n");
+    StdOutPrintf("Partition deleted\n");
     return 0;
 }
 
@@ -543,10 +519,8 @@ STATIC INT CmdDiskMgrDelete(INT ArgC, const CHAR *ArgV[]) {
 
 STATIC INT CmdDiskMgrLabel(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 4) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "Usage: diskmgr label <disk>:<part> <label>\n");
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "  Example: diskmgr label NVME1p1 rootfs\n");
+        StdErrPrintf("Usage: diskmgr label <disk>:<part> <label>\n");
+        StdOutPrintf("  Example: diskmgr label NVME1p1 rootfs\n");
         return -1;
     }
 
@@ -555,25 +529,23 @@ STATIC INT CmdDiskMgrLabel(INT ArgC, const CHAR *ArgV[]) {
 
     Partition *P = DiskMgrFindPartition(PartName);
     if (!P) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Partition not found: %s\n", PartName);
+        StdErrPrintf("Partition not found: %s\n", PartName);
         return -1;
     }
 
     if (!P->IsGpt) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "Only GPT partitions support labels (this is MBR)\n");
+        StdErrPrintf("Only GPT partitions support labels (this is MBR)\n");
         return -1;
     }
 
     INT Ret = PartitionCreateGPT(P->ParentDisk, P->StartLba, P->SectorCount,
                                   P->Type, Label);
     if (Ret != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Label update failed (%d)\n", Ret);
+        StdErrPrintf("Label update failed (%d)\n", Ret);
         return -1;
     }
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS,
-                  "Label set: %s -> '%s'\n", PartName, Label);
+    StdOutPrintf("Label set: %s -> '%s'\n", PartName, Label);
     return 0;
 }
 
@@ -655,14 +627,14 @@ STATIC VOID CmdGetVolumeParams(Disk *D, Partition *P,
 
 STATIC INT CmdDiskMgrCfg(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 3) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Usage: diskmgr cfg <volume>\n");
+        StdErrPrintf("Usage: diskmgr cfg <volume>\n");
         return -1;
     }
 
     Disk *D = NULLPTR;
     Partition *P = NULLPTR;
     if (CmdResolveVolume(ArgV[2], &D, &P) == 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Volume not found: %s\n", ArgV[2]);
+        StdErrPrintf("Volume not found: %s\n", ArgV[2]);
         return -1;
     }
 
@@ -670,9 +642,9 @@ STATIC INT CmdDiskMgrCfg(INT ArgC, const CHAR *ArgV[]) {
     DiskCfgFsKind Fs;
     CmdGetVolumeParams(D, P, &StartLba, &SectorCount, &Fs);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n=== DiskCfg: %s ===\n",
+    StdOutPrintf("\n=== DiskCfg: %s ===\n",
                   P ? P->Name : D->Name);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  fs_kind:       %s\n",
+    StdOutPrintf("  fs_kind:       %s\n",
                   Fs == DISKCFG_FS_FAT32 ? "FAT32" :
                   Fs == DISKCFG_FS_EXFAT ? "exFAT" :
                   Fs == DISKCFG_FS_ISO9660 ? "ISO9660" : "none");
@@ -683,14 +655,14 @@ STATIC INT CmdDiskMgrCfg(INT ArgC, const CHAR *ArgV[]) {
     BOOL CfgStale       = P ? P->CfgStale : D->CfgStale;
     BOOL IsRoot         = P ? P->IsRoot   : D->IsRoot;
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  id:            %s\n",
+    StdOutPrintf("  id:            %s\n",
                   CfgId[0] ? CfgId : "(none)");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  alias:         %s\n",
+    StdOutPrintf("  alias:         %s\n",
                   Alias[0] ? Alias : "(none)");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  is_root:       %u\n", IsRoot ? 1 : 0);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  cfg_valid:     %u\n", CfgValid ? 1 : 0);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  cfg_stale:     %u\n", CfgStale ? 1 : 0);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("  is_root:       %u\n", IsRoot ? 1 : 0);
+    StdOutPrintf("  cfg_valid:     %u\n", CfgValid ? 1 : 0);
+    StdOutPrintf("  cfg_stale:     %u\n", CfgStale ? 1 : 0);
+    StdOutPrintf("\n");
 
     return 0;
 }
@@ -702,17 +674,15 @@ STATIC INT CmdDiskMgrCfg(INT ArgC, const CHAR *ArgV[]) {
 
 STATIC INT CmdDiskMgrSet(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 5) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "Usage: diskmgr set <volume> <key> <value>\n");
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "  keys: disk_name, is_root\n");
+        StdErrPrintf("Usage: diskmgr set <volume> <key> <value>\n");
+        StdOutPrintf("  keys: disk_name, is_root\n");
         return -1;
     }
 
     Disk *D = NULLPTR;
     Partition *P = NULLPTR;
     if (CmdResolveVolume(ArgV[2], &D, &P) == 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Volume not found: %s\n", ArgV[2]);
+        StdErrPrintf("Volume not found: %s\n", ArgV[2]);
         return -1;
     }
 
@@ -720,15 +690,14 @@ STATIC INT CmdDiskMgrSet(INT ArgC, const CHAR *ArgV[]) {
     const CHAR *Value = ArgV[4];
 
     if (!D->Write) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "%s is read-only\n", D->Name);
+        StdErrPrintf("%s is read-only\n", D->Name);
         return -1;
     }
 
     /* Determining whether the volume is mounted */
     const CHAR *VolName = P ? P->Name : D->Name;
     if (CmdIsVolumeMounted(VolName)) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "%s is mounted. Unmount first: unmount %s\n",
+        StdErrPrintf("%s is mounted. Unmount first: unmount %s\n",
                       VolName, VolName);
         return -1;
     }
@@ -749,8 +718,7 @@ STATIC INT CmdDiskMgrSet(INT ArgC, const CHAR *ArgV[]) {
     }
 
     if (Fs != DISKCFG_FS_FAT32 && Fs != DISKCFG_FS_EXFAT) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "Volume has no writable FS\n");
+        StdErrPrintf("Volume has no writable FS\n");
         return -1;
     }
 
@@ -767,14 +735,14 @@ STATIC INT CmdDiskMgrSet(INT ArgC, const CHAR *ArgV[]) {
     } else if (StrCaseCmp(Key, "is_root") == 0) {
         NewIsRoot = (AToI(Value) != 0);
     } else {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Unknown key: %s\n", Key);
+        StdErrPrintf("Unknown key: %s\n", Key);
         return -1;
     }
 
     INT Rc = DiskCfgWriteVolume(D, StartLba, SectorCount, Fs,
                                  NewName, NewIsRoot);
     if (Rc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Write failed (%d)\n", Rc);
+        StdErrPrintf("Write failed (%d)\n", Rc);
         return -1;
     }
 
@@ -789,8 +757,7 @@ STATIC INT CmdDiskMgrSet(INT ArgC, const CHAR *ArgV[]) {
         D->CfgValid = TRUE;
     }
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS,
-                  "Updated %s: %s=%s\n", VolName, Key, Value);
+    StdOutPrintf("Updated %s: %s=%s\n", VolName, Key, Value);
     return 0;
 }
 
@@ -800,14 +767,14 @@ STATIC INT CmdDiskMgrSet(INT ArgC, const CHAR *ArgV[]) {
 
 STATIC INT CmdDiskMgrClear(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 3) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Usage: diskmgr clear <volume>\n");
+        StdErrPrintf("Usage: diskmgr clear <volume>\n");
         return -1;
     }
 
     Disk *D = NULLPTR;
     Partition *P = NULLPTR;
     if (CmdResolveVolume(ArgV[2], &D, &P) == 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Volume not found: %s\n", ArgV[2]);
+        StdErrPrintf("Volume not found: %s\n", ArgV[2]);
         return -1;
     }
 
@@ -816,22 +783,20 @@ STATIC INT CmdDiskMgrClear(INT ArgC, const CHAR *ArgV[]) {
     CmdGetVolumeParams(D, P, &StartLba, &SectorCount, &Fs);
 
     if (Fs != DISKCFG_FS_FAT32 && Fs != DISKCFG_FS_EXFAT) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "Volume has no writable FS (fs_kind=%d)\n", (INT)Fs);
+        StdErrPrintf("Volume has no writable FS (fs_kind=%d)\n", (INT)Fs);
         return -1;
     }
 
     const CHAR *VolName = P ? P->Name : D->Name;
     if (CmdIsVolumeMounted(VolName)) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "%s is mounted. Unmount first.\n", VolName);
+        StdErrPrintf("%s is mounted. Unmount first.\n", VolName);
         return -1;
     }
 
     /* Writing an empty disk.cfg is actually a "reset" */
     INT Rc = DiskCfgWriteVolume(D, StartLba, SectorCount, Fs, "", FALSE);
     if (Rc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Write failed (%d)\n", Rc);
+        StdErrPrintf("Write failed (%d)\n", Rc);
         return -1;
     }
 
@@ -847,7 +812,7 @@ STATIC INT CmdDiskMgrClear(INT ArgC, const CHAR *ArgV[]) {
         D->CfgStale = FALSE;
     }
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS, "Cleared cfg on %s\n", VolName);
+    StdOutPrintf("Cleared cfg on %s\n", VolName);
     return 0;
 }
 
@@ -857,8 +822,7 @@ STATIC INT CmdDiskMgrClear(INT ArgC, const CHAR *ArgV[]) {
 
 STATIC INT CmdDiskMgrRename(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 4) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "Usage: diskmgr rename <volume> <new_name>\n");
+        StdErrPrintf("Usage: diskmgr rename <volume> <new_name>\n");
         return -1;
     }
 
@@ -879,8 +843,7 @@ STATIC INT CmdDiskMgrRename(INT ArgC, const CHAR *ArgV[]) {
 
 STATIC INT CmdDiskMgrSetRoot(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 3) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "Usage: diskmgr setroot <volume>\n");
+        StdErrPrintf("Usage: diskmgr setroot <volume>\n");
         return -1;
     }
 
@@ -895,8 +858,7 @@ STATIC INT CmdDiskMgrSetRoot(INT ArgC, const CHAR *ArgV[]) {
 
 STATIC INT CmdDiskMgrUnsetRoot(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 3) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "Usage: diskmgr unsetroot <volume>\n");
+        StdErrPrintf("Usage: diskmgr unsetroot <volume>\n");
         return -1;
     }
 
@@ -909,67 +871,372 @@ STATIC INT CmdDiskMgrUnsetRoot(INT ArgC, const CHAR *ArgV[]) {
     return CmdDiskMgrSet(5, NewArgV);
 }
 
+#define ROOTSETUP_MAX_PATH 512
+
+STATIC const CHAR GRootSetupEnvConf[] =
+    "# 2kOS environment\n"
+    "#\n"
+    "# BIN      — default directory for user-space binaries\n"
+    "# PATH     — colon-separated list of directories searched for commands\n"
+    "\n"
+    "BIN=/bin\n"
+    "PATH=/bin\n";
+
+/* Look up the USER.iso Limine module. */
+STATIC struct limine_file *RootSetupFindUserIso(VOID) {
+    STATIC const CHAR *Candidates[] = {
+        "USER.iso", "user.iso",
+        "installfiles/USER.iso", "installfiles/user.iso",
+        NULLPTR
+    };
+
+    for (INT I = 0; Candidates[I]; I++) {
+        struct limine_file *F = LimineFindModuleByString(Candidates[I]);
+        if (F) return F;
+        F = LimineFindModuleByPath(Candidates[I]);
+        if (F) return F;
+    }
+    return NULLPTR;
+}
+
+/* Ensure <Parent>/<Name> exists as a directory.
+ * On SUCCESS returns +1 reference in *Out. */
+STATIC INT RootSetupEnsureDir(VfsInode *Parent, const CHAR *Name,
+                              VfsInode **Out) {
+    if (!Parent || !Name || !Out) return INCORRECT_VALUE;
+
+    VfsInode *Existing = NULLPTR;
+    if (VfsWalk(Parent, Name, &Existing) == SUCCESS) {
+        if (Existing->IMode != FT_DIR) {
+            VfsInodeUnref(Existing);
+            return INCORRECT_VALUE;
+        }
+        *Out = Existing;
+        return SUCCESS;
+    }
+
+    return VfsMkdir(Parent, Name, FT_DIR, Out);
+}
+
+/* Write <Data>/<Size> to <Dir>/<Path>. */
+STATIC INT RootSetupWriteFile(VfsInode *Dir, const CHAR *Path,
+                              const VOID *Data, UINT32 Size) {
+    VfsFile *F = NULLPTR;
+    INT Rc = VfsOpen(Dir, Path,
+                     VFS_O_WRITE | VFS_O_CREAT | VFS_O_TRUNC, &F);
+    if (Rc != SUCCESS) {
+        StdErrPrintf("rootsetup: VfsOpen('%s') failed (%d)\n", Path, Rc);
+        return Rc;
+    }
+
+    UINT32 Written = 0;
+    Rc = VfsWrite(F, Data, Size, &Written);
+    VfsClose(F);
+
+    if (Rc != SUCCESS || Written != Size) {
+        StdErrPrintf("rootsetup: VfsWrite('%s') failed (%d, %u/%u)\n",
+                     Path, Rc, Written, Size);
+        return IO_ERROR;
+    }
+    return SUCCESS;
+}
+
+/* Recursively copy <SrcDir> into <DstDir>. <RelPrefix> is used only for
+ * error messages (e.g. "bin/subdir"). */
+STATIC INT RootSetupCopyTree(VfsInode *SrcDir, VfsInode *DstDir,
+                             const CHAR *RelPrefix, UINT32 *Copied) {
+    if (!SrcDir || !DstDir) return INCORRECT_VALUE;
+
+    UINT64 Pos = 0;
+    CHAR Name[NAME_MAX + 1];
+    UINT32 NameLen = 0;
+    UINT32 Type = 0;
+
+    while (VfsReadDir(SrcDir, &Pos, Name, &NameLen, &Type) == SUCCESS) {
+        if (NameLen == 0) continue;
+        if ((NameLen == 1 && Name[0] == '.') ||
+            (NameLen == 2 && Name[0] == '.' && Name[1] == '.'))
+            continue;
+
+        Name[NameLen] = '\0';
+
+        CHAR RelPath[ROOTSETUP_MAX_PATH];
+        if (RelPrefix && RelPrefix[0]) {
+            SnPrintf(RelPath, sizeof(RelPath), "%s/%s", RelPrefix, Name);
+        } else {
+            SnPrintf(RelPath, sizeof(RelPath), "%s", Name);
+        }
+
+        if (Type == FT_DIR) {
+            VfsInode *SubDst = NULLPTR;
+            INT Rc = RootSetupEnsureDir(DstDir, Name, &SubDst);
+            if (Rc != SUCCESS) {
+                StdErrPrintf("rootsetup: mkdir '%s' failed (%d)\n",
+                             RelPath, Rc);
+                return Rc;
+            }
+
+            VfsInode *SubSrc = NULLPTR;
+            Rc = VfsWalk(SrcDir, Name, &SubSrc);
+            if (Rc != SUCCESS) {
+                StdErrPrintf("rootsetup: walk '%s' failed (%d)\n",
+                             RelPath, Rc);
+                VfsInodeUnref(SubDst);
+                return Rc;
+            }
+
+            Rc = RootSetupCopyTree(SubSrc, SubDst, RelPath, Copied);
+            VfsInodeUnref(SubSrc);
+            VfsInodeUnref(SubDst);
+            if (Rc != SUCCESS) return Rc;
+
+        } else if (Type == FT_REG_FILE) {
+            VfsFile *Src = NULLPTR;
+            INT Rc = VfsOpen(SrcDir, Name, VFS_O_READ, &Src);
+            if (Rc != SUCCESS) {
+                StdErrPrintf("rootsetup: open '%s' failed (%d)\n",
+                             RelPath, Rc);
+                return Rc;
+            }
+
+            UINT64 Size = Src->FInode ? Src->FInode->ISize : 0;
+            if (Size == 0) {
+                VfsClose(Src);
+                Rc = RootSetupWriteFile(DstDir, Name, NULLPTR, 0);
+                if (Rc == SUCCESS) (*Copied)++;
+                continue;
+            }
+            if (Size > 64 * 1024 * 1024) {
+                VfsClose(Src);
+                StdErrPrintf("rootsetup: '%s' too large (%llu)\n",
+                             RelPath, Size);
+                return NO_MEMORY;
+            }
+
+            UINT8 *Buf = (UINT8 *)MemoryAllocate((USIZE)Size);
+            if (!Buf) {
+                VfsClose(Src);
+                return NO_MEMORY;
+            }
+
+            UINT32 Got = 0;
+            Rc = VfsRead(Src, Buf, (UINT32)Size, &Got);
+            VfsClose(Src);
+            if (Rc != SUCCESS || Got != Size) {
+                MemoryFree(Buf);
+                StdErrPrintf("rootsetup: read '%s' failed (%d, %u/%llu)\n",
+                             RelPath, Rc, Got, Size);
+                return IO_ERROR;
+            }
+
+            Rc = RootSetupWriteFile(DstDir, Name, Buf, (UINT32)Size);
+            MemoryFree(Buf);
+            if (Rc != SUCCESS) return Rc;
+            (*Copied)++;
+        }
+    }
+
+    return SUCCESS;
+}
+
+STATIC INT CmdDiskMgrRootSetup(INT ArgC, const CHAR *ArgV[]) {
+    if (ArgC < 3) {
+        StdErrPrintf("Usage: diskmgr rootsetup <volume>\n");
+        StdErrPrintf("  <volume> = disk or partition (SATA0, SATA0:2, ...)\n");
+        StdErrPrintf("  Copies USER contents into /bin on that volume.\n");
+        StdErrPrintf("  Requires 'USER' to be registered (not nomountuser).\n");
+        return -1;
+    }
+
+    const CHAR *Name = ArgV[2];
+
+    Disk *D = NULLPTR;
+    Partition *P = NULLPTR;
+    if (CmdResolveVolume(Name, &D, &P) == 0) {
+        StdErrPrintf("Volume not found: %s\n", Name);
+        return -1;
+    }
+
+    if (!D->Write) {
+        StdErrPrintf("%s is read-only\n", D->Name);
+        return -1;
+    }
+
+    UINT64 StartLba    = P ? P->StartLba    : 0;
+    UINT64 SectorCount = P ? P->SectorCount : D->SectorCount;
+
+    /* 1. USER must have been registered by MountUserIso.
+     *    If nomountuser was set, it is intentionally absent. */
+    Disk *UserDisk = DiskMgrFindDisk("USER");
+    if (!UserDisk) {
+        StdErrPrintf("rootsetup: 'USER' is not registered\n");
+        StdErrPrintf("rootsetup: did you boot with 'nomountuser'?\n");
+        return NOT_FOUND;
+    }
+    if (!UserDisk->Read) {
+        StdErrPrintf("rootsetup: 'USER' has no read handler\n");
+        return DEVICE_INVALID;
+    }
+
+    /* 2. Mount USER if needed. Never unmount it afterwards — USER is
+     *    a system-wide resource; rootsetup only borrows it. */
+    VfsInode *UserRoot = NULLPTR;
+    CHAR UserProbe[] = "USER::/";
+    if (VfsWalk(VfsRootInode, UserProbe, &UserRoot) != SUCCESS) {
+        INT Rc = VfsMountExNoCd("iso9660", UserDisk, 0, UserDisk->SectorCount,
+                            "USER", &UserRoot);
+        if (Rc != SUCCESS) {
+            StdErrPrintf("rootsetup: cannot mount USER (%d)\n", Rc);
+            return Rc;
+        }
+        /* Leave it mounted on purpose. */
+    }
+
+    /* 3. Mount the target volume — unless it is already mounted. */
+    const CHAR *FsName = VfsDetectFilesystemAt(D, StartLba);
+    if (!FsName) {
+        StdErrPrintf("rootsetup: cannot detect FS on %s at LBA %llu\n",
+                     D->Name, StartLba);
+        VfsInodeUnref(UserRoot);
+        return NOT_FOUND;
+    }
+
+    VfsInode *DstRoot = NULLPTR;
+    BOOL WeMountedDst = FALSE;
+
+    CHAR DstProbe[DRIVE_NAME_MAX + 4];
+    SnPrintf(DstProbe, sizeof(DstProbe), "%s::/", D->Name);
+
+    if (VfsWalk(VfsRootInode, DstProbe, &DstRoot) == SUCCESS) {
+    	StdOutPrintf("rootsetup: %s already mounted, reusing\n", D->Name);
+    } else {
+    	if (!D->Read) {
+            StdErrPrintf("rootsetup: %s has no Read handler\n", D->Name);
+            VfsInodeUnref(UserRoot);
+           return DEVICE_INVALID;
+        }
+
+    	const CHAR *FsName = VfsDetectFilesystemAt(D, StartLba);
+    	if (!FsName) {
+            StdErrPrintf("rootsetup: cannot detect FS on %s at LBA %llu\n",
+                     D->Name, StartLba);
+            VfsInodeUnref(UserRoot);
+            return NOT_FOUND;
+    	}
+
+    	INT Rc = VfsMountExNoCd(FsName, D, StartLba, SectorCount,
+                            NULLPTR, &DstRoot);
+    	if (Rc != SUCCESS) {
+            StdErrPrintf("rootsetup: VfsMountEx(%s) failed (%d)\n", FsName, Rc);
+            VfsInodeUnref(UserRoot);
+            return Rc;
+    	}
+    	WeMountedDst = TRUE;
+    }
+
+    /* 4. Create /bin on the target. */
+    VfsInode *BinDir = NULLPTR;
+    INT Rc = RootSetupEnsureDir(DstRoot, "bin", &BinDir);
+    if (Rc != SUCCESS) {
+        StdErrPrintf("rootsetup: cannot create /bin (%d)\n", Rc);
+        goto done;
+    }
+
+    /* 5. Copy USER -> /bin. */
+    UINT32 Copied = 0;
+    Rc = RootSetupCopyTree(UserRoot, BinDir, "", &Copied);
+    if (Rc != SUCCESS) {
+        StdErrPrintf("rootsetup: copy failed (%d)\n", Rc);
+    } else {
+        StdOutPrintf("rootsetup: %u file(s) copied to /bin\n", Copied);
+    }
+
+     /* 6. Ensure /etc exists. */
+    VfsInode *EtcDir = NULLPTR;
+    Rc = RootSetupEnsureDir(DstRoot, "etc", &EtcDir);
+    if (Rc != SUCCESS) {
+        StdErrPrintf("rootsetup: cannot create /etc (%d)\n", Rc);
+        goto done;
+    }
+
+    /* 7. Write /etc/env.conf if it does not already exist. */
+    {
+        VfsInode *ExistingEnv = NULLPTR;
+        if (VfsWalk(EtcDir, "env.conf", &ExistingEnv) == SUCCESS) {
+            VfsInodeUnref(ExistingEnv);
+            StdOutPrintf("rootsetup: /etc/env.conf already exists, left intact\n");
+        } else {
+            Rc = RootSetupWriteFile(EtcDir, "env.conf",
+                                    GRootSetupEnvConf,
+                                    (UINT32)StrLen(GRootSetupEnvConf));
+            if (Rc != SUCCESS) {
+                StdErrPrintf("rootsetup: cannot write /etc/env.conf (%d)\n", Rc);
+                VfsInodeUnref(EtcDir);
+                goto done;
+            }
+            StdOutPrintf("rootsetup: /etc/env.conf created\n");
+        }
+    }
+    VfsInodeUnref(EtcDir);
+
+done:
+    if (BinDir) VfsInodeUnref(BinDir);
+    VfsInodeUnref(DstRoot);
+
+    /* Only unmount the target if we mounted it. */
+    if (WeMountedDst) VfsUnmountDrive(D->Name);
+
+    /* USER is intentionally left mounted. */
+    VfsInodeUnref(UserRoot);
+
+    if (Rc == SUCCESS) {
+        StdOutPrintf("rootsetup: done\n");
+        return 0;
+    }
+    return -1;
+}
+
 /* ============================================================================
  * Help
  * ============================================================================ */
 
 STATIC VOID CmdDiskMgrHelp(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "=== DiskMgr Commands ===\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr list                        List all disks\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr info <disk>                 Show disk information\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr parts <disk>                List partitions on disk\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr init <disk> gpt             Initialize GPT\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr create <disk> <size> <type> [flags]\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "      MBR:  diskmgr create SATA0 100 FAT32\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "      GPT:  diskmgr create NVME1 100 ext4 -gpt -label rootfs\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "      Optional: -start <lba> (manual placement)\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr delete <disk> <idx>         Delete partition\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr label <disk>p<idx> <label>  Set GPT label\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  === DiskCfg ===\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr cfg <volume>                Show disk.cfg for volume\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr set <volume> <key> <value>  Change disk.cfg\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "      keys: disk_name, is_root\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr clear <volume>              Reset disk.cfg\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr rename <volume> <new_name>  Shortcut for set disk_name\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr setroot <volume>            Shortcut for set is_root=1\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr unsetroot <volume>          Shortcut for set is_root=0\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  diskmgr help                        Show this help\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Partition types:\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  NTFS FAT32 FAT16 Linux EXT4 EFI SWAP\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Schemes:\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  MBR  — legacy, max 4 primary, 2 TB max\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "  GPT  — modern, 128 partitions, > 2 TB, labels, GUIDs\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("=== DiskMgr Commands ===\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("  diskmgr list                        List all disks\n");
+    StdOutPrintf("  diskmgr info <disk>                 Show disk information\n");
+    StdOutPrintf("  diskmgr parts <disk>                List partitions on disk\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("  diskmgr init <disk> gpt             Initialize GPT\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("  diskmgr create <disk> <size> <type> [flags]\n");
+    StdOutPrintf("      MBR:  diskmgr create SATA0 100 FAT32\n");
+    StdOutPrintf("      GPT:  diskmgr create NVME1 100 ext4 -gpt -label rootfs\n");
+    StdOutPrintf("      Optional: -start <lba> (manual placement)\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("  diskmgr delete <disk> <idx>         Delete partition\n");
+    StdOutPrintf("  diskmgr label <disk>p<idx> <label>  Set GPT label\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("  === DiskCfg ===\n");
+    StdOutPrintf("  diskmgr cfg <volume>                Show disk.cfg for volume\n");
+    StdOutPrintf("  diskmgr set <volume> <key> <value>  Change disk.cfg\n");
+    StdOutPrintf("      keys: disk_name, is_root\n");
+    StdOutPrintf("  diskmgr clear <volume>              Reset disk.cfg\n");
+    StdOutPrintf("  diskmgr rename <volume> <new_name>  Shortcut for set disk_name\n");
+    StdOutPrintf("  diskmgr setroot <volume>            Shortcut for set is_root=1\n");
+    StdOutPrintf("  diskmgr rootsetup <volume>          Setup root filesystem\n");
+    StdOutPrintf("  diskmgr unsetroot <volume>          Shortcut for set is_root=0\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("  diskmgr help                        Show this help\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Partition types:\n");
+    StdOutPrintf("  NTFS FAT32 FAT16 Linux EXT4 EFI SWAP\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Schemes:\n");
+    StdOutPrintf("  MBR  — legacy, max 4 primary, 2 TB max\n");
+    StdOutPrintf("  GPT  — modern, 128 partitions, > 2 TB, labels, GUIDs\n");
+    StdOutPrintf("\n");
 }
 
 /* ============================================================================
@@ -1028,6 +1295,9 @@ INT CmdDiskMgrHandler(INT ArgC, const CHAR *ArgV[]) {
     if (StrCmp(SubCmd, "setroot") == 0) {
         return CmdDiskMgrSetRoot(ArgC, ArgV);
     }
+    if (StrCmp(SubCmd, "rootsetup") == 0) {
+        return CmdDiskMgrRootSetup(ArgC, ArgV);
+    }
     if (StrCmp(SubCmd, "unsetroot") == 0) {
         return CmdDiskMgrUnsetRoot(ArgC, ArgV);
     }
@@ -1038,8 +1308,8 @@ INT CmdDiskMgrHandler(INT ArgC, const CHAR *ArgV[]) {
         return 0;
     }
 
-    BaseconPrintf(BASECON_TYPE_ERROR, "Unknown subcommand: %s\n", SubCmd);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Try 'diskmgr help' for usage\n");
+    StdErrPrintf("Unknown subcommand: %s\n", SubCmd);
+    StdOutPrintf("Try 'diskmgr help' for usage\n");
     return -1;
 }
 

@@ -1,9 +1,11 @@
 #include <Drivers/Disk/DiskMgr.h>
 #include <Mem/Allocator.h>
+#include <Io/StdWarn.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Time/Rtc.h>
-#include <Basecon.h>
 #include <Fs/Fat32.h>
 #include <Return.h>
 
@@ -493,7 +495,7 @@ STATIC INT Fat32Create(VfsInode *Dir, const CHAR *Name, UINT32 Mode, VfsInode **
     VfsInode *Existing;
     if (Fat32Lookup(Dir, Name, &Existing) == 0) {
         VfsInodeUnref(Existing);
-        return -1;
+        RETURN(ALREADY_EXISTS);
     }
 
     UINT32 Cluster = Priv->FirstCluster;
@@ -619,13 +621,20 @@ STATIC INT Fat32Create(VfsInode *Dir, const CHAR *Name, UINT32 Mode, VfsInode **
         MemoryFree(DirBuf);
     }
 
+    UINT32 FirstCluster = (Entry->FirstClusterHi << 16) | Entry->FirstClusterLo;
+
     Fat32WriteCluster(Fat, TargetCluster, Buf);
     MemoryFree(Buf);
 
     VfsInode *Inode = VfsAllocInode();
     Fat32InodePrivate *NewPriv = (Fat32InodePrivate*)MemoryAllocate(sizeof(Fat32InodePrivate));
+    if (!Inode || !NewPriv) {
+    	if (Inode) VfsFreeInode(Inode);
+    	MemoryFree(NewPriv);
+    	return -1;
+    }
+    MemSet(NewPriv, 0, sizeof(*NewPriv));
 
-    UINT32 FirstCluster = (Entry->FirstClusterHi << 16) | Entry->FirstClusterLo;
 
     NewPriv->Fat = Fat;
     NewPriv->FirstCluster = FirstCluster;
@@ -915,7 +924,7 @@ STATIC VfsFileOperations GFat32FileOps = {
 // ============================================================================
 
 STATIC INT Fat32Mount(Disk *Dev, UINT64 StartLba, UINT64 SectorCount, VfsInode **Root) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "fat32: mounting...\n");
+    StdOutPrintf("fat32: mounting...\n");
 
     Fat32 *Fat = (Fat32*)MemoryAllocate(sizeof(Fat32));
     if (!Fat) return -1;
@@ -925,7 +934,7 @@ STATIC INT Fat32Mount(Disk *Dev, UINT64 StartLba, UINT64 SectorCount, VfsInode *
 
     UINT8 Sector[512];
     if (Fat32ReadSectors(Fat, StartLba, 1, Sector) != 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "fat32: cannot read boot sector\n");
+        StdErrPrintf("fat32: cannot read boot sector\n");
         MemoryFree(Fat);
         return -1;
     }
@@ -934,7 +943,7 @@ STATIC INT Fat32Mount(Disk *Dev, UINT64 StartLba, UINT64 SectorCount, VfsInode *
 
     if (Bpb->BytesPerSector != 512 || Bpb->SectorsPerCluster == 0 ||
         Bpb->FatSize32 == 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "fat32: not a FAT32 volume\n");
+        StdErrPrintf("fat32: not a FAT32 volume\n");
         MemoryFree(Fat);
         return -1;
     }
@@ -998,7 +1007,7 @@ STATIC INT Fat32Mount(Disk *Dev, UINT64 StartLba, UINT64 SectorCount, VfsInode *
 
     *Root = RootInode;
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS, "fat32: mounted successfully\n");
+    StdOutPrintf("fat32: mounted successfully\n");
     return 0;
 }
 
@@ -1008,7 +1017,7 @@ STATIC INT Fat32Mount(Disk *Dev, UINT64 StartLba, UINT64 SectorCount, VfsInode *
 
 INT Fat32Format(Disk *Dev, UINT64 StartLba, UINT64 SectorCount) {
     if (!Dev || !Dev->Write) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "fat32: device not ready\n");
+        StdErrPrintf("fat32: device not ready\n");
         return -1;
     }
 
@@ -1068,7 +1077,7 @@ INT Fat32Format(Disk *Dev, UINT64 StartLba, UINT64 SectorCount) {
     BootSector[511] = 0xAA;
 
     if (Dev->Write(Dev, StartLba + 0, 1, BootSector) != 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "fat32: cannot write boot sector\n");
+        StdErrPrintf("fat32: cannot write boot sector\n");
         return -1;
     }
 
@@ -1101,7 +1110,7 @@ INT Fat32Format(Disk *Dev, UINT64 StartLba, UINT64 SectorCount) {
     }
 
     UINT32 LastPercent = 0xFFFFFFFF;
-    BaseconPrintf(BASECON_TYPE_NORMAL, "[");
+    StdOutPrintf("[");
 
     for (INT FatNum = 0; FatNum < 2; FatNum++) {
         UINT32 FatStartSector = ReservedSectors + FatNum * FatSize;
@@ -1127,18 +1136,17 @@ INT Fat32Format(Disk *Dev, UINT64 StartLba, UINT64 SectorCount) {
 
             if (Percent != LastPercent) {
                 UINT32 Pos = (Percent * 50) / 100;
-                BaseconPrintf(BASECON_TYPE_NORMAL, "\r[");
+                StdOutPrintf("\r[");
                 for (UINT32 J = 0; J < 50; J++) {
-                    BaseconPrintf(BASECON_TYPE_NORMAL,
-                                  "%s", J < Pos ? "=" : (J == Pos ? ">" : " "));
+                    StdOutPrintf("%s", J < Pos ? "=" : (J == Pos ? ">" : " "));
                 }
-                BaseconPrintf(BASECON_TYPE_NORMAL, "] %3u%%", Percent);
+                StdOutPrintf("] %3u%%", Percent);
                 LastPercent = Percent;
             }
         }
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
     MemoryFree(BlockBuf);
     MemoryFree(Fat);
 
@@ -1171,8 +1179,7 @@ INT Fat32Format(Disk *Dev, UINT64 StartLba, UINT64 SectorCount) {
                                     SectorCount ? SectorCount : Dev->SectorCount,
                                     DISKCFG_FS_FAT32, "", FALSE);
     if (CfgRc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "fat32: disk.cfg not written (%d)\n", CfgRc);
+        StdWarnPrintf("fat32: disk.cfg not written (%d)\n", CfgRc);
     }
 
     return 0;

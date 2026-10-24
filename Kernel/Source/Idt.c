@@ -1,7 +1,8 @@
 #include <Drivers/Irq/Apic/Apic.h>
 #include <InterruptList.h>
+#include <Io/StdErr.h>
+#include <Io/StdOut.h>
 #include <Asm/Cpu.h>
-#include <Basecon.h>
 #include <Asm/Io.h>
 #include <Types.h>
 #include <Idt.h>
@@ -43,8 +44,11 @@ VOID SetupSyscall(VOID) {
     WriteMSR(IA32_LSTAR, (UINT64)SyscallEntry);
     WriteMSR(IA32_SFMASK, 0x0000000000004700ULL);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "idt: syscall configured\n");
+    EXTERN(VOID, SyscallInt80Handler());
+
+    IdtSetGate(0x80, SyscallInt80Handler, KERNEL_CODE_SEL, IDT_GATE_SYSCALL, 0);
+
+    StdOutPrintf("idt: syscall configured\n");
 }
 
 struct IdtEntry Idt[IDT_ENTRIES];

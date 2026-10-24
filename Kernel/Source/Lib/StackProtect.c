@@ -1,7 +1,7 @@
 #include <Asm/Cpu.h>
 #include <Types.h>
 
-UINTPTR __stack_chk_guard = 0;
+__attribute__((used, externally_visible)) UINTPTR __stack_chk_guard = 0;
 
 // Add these attributes so that LTO does not touch the function
 STATIC VOID ATTRIBUTE(noreturn) ATTRIBUTE(used) ATTRIBUTE(noinline) 

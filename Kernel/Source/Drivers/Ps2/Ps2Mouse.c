@@ -5,9 +5,10 @@
 #include <Drivers/Ps2/Ps2.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Asm/Cpu.h>
 #include <KDriver.h>
-#include <Basecon.h>
 #include <Asm/Io.h>
 #include <Return.h>
 #include <Idt.h>
@@ -229,7 +230,7 @@ STATIC BOOL Ps2MouseSimpleCommand(UINT8 Command) {
 STATIC BOOL Ps2MouseReset(VOID) {
     UINT8 Response;
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: resetting mouse...\n");
+    StdOutPrintf("ps2mouse: resetting mouse...\n");
     
     // Clearing the buffer before sending the command
     Ps2MouseFlushBuffer();
@@ -239,23 +240,23 @@ STATIC BOOL Ps2MouseReset(VOID) {
     
     // 2. Wait and check ACK (0xFA)
     Response = Ps2MouseReadWithTimeout(500);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: reset byte 1 (ACK): 0x%02X\n", Response);
+    StdOutPrintf("ps2mouse: reset byte 1 (ACK): 0x%02X\n", Response);
     if (Response != PS2_MOUSE_RET_ACK) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: Mouse reset failed: No ACK\n");
+        StdOutPrintf("ps2mouse: Mouse reset failed: No ACK\n");
         return FALSE;
     }
     
     // 3. Wait and check BAT OK (0xAA)
     Response = Ps2MouseReadWithTimeout(1000); 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: reset byte 2 (BAT): 0x%02X\n", Response);
+    StdOutPrintf("ps2mouse: reset byte 2 (BAT): 0x%02X\n", Response);
     if (Response != PS2_MOUSE_RET_BAT) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: BAT failed (expected 0xAA)\n");
+        StdOutPrintf("ps2mouse: BAT failed (expected 0xAA)\n");
         return FALSE;
     }
     
     // 4. Read Device ID (0x00)
     UINT8 DeviceId = Ps2MouseReadWithTimeout(500);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: device ID: 0x%02X\n", DeviceId);
+    StdOutPrintf("ps2mouse: device ID: 0x%02X\n", DeviceId);
     
     // Just in case, we clear the buffer from possible garbage
     Ps2MouseFlushBuffer();
@@ -270,7 +271,7 @@ STATIC BOOL Ps2MouseReset(VOID) {
 STATIC INT Ps2MouseDetectType(VOID) {
     UINT8 Param[2];
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: detecting mouse type...\n");
+    StdOutPrintf("ps2mouse: detecting mouse type...\n");
     
     // Reset to defaults before defining
     Ps2MouseSimpleCommand(PS2_MOUSE_CMD_RESET_DIS);
@@ -279,15 +280,15 @@ STATIC INT Ps2MouseDetectType(VOID) {
     
     Ps2MouseCommandRead(PS2_MOUSE_CMD_GETID, Param, 1);
     UINT8 BaseId = Param[0];
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: base ID: 0x%02X\n", BaseId);
+    StdOutPrintf("ps2mouse: base ID: 0x%02X\n", BaseId);
     
     if (BaseId != 0x00 && BaseId != 0x03 && BaseId != 0x04 && BaseId != 0xFF) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: unknown base ID, assuming standard\n");
+        StdOutPrintf("ps2mouse: unknown base ID, assuming standard\n");
         return PS2_MOUSE_STANDARD;
     }
     
     // Trying IntelliMouse: 200, 100, 80
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: trying IntelliMouse...\n");
+    StdOutPrintf("ps2mouse: trying IntelliMouse...\n");
     
     Ps2MouseCommandWithData(PS2_MOUSE_CMD_SETRATE, 200);
     Ps2MouseCommandWithData(PS2_MOUSE_CMD_SETRATE, 100);
@@ -295,15 +296,15 @@ STATIC INT Ps2MouseDetectType(VOID) {
     
     // Using the new ID read function again
     Ps2MouseCommandRead(PS2_MOUSE_CMD_GETID, Param, 1);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: IntelliMouse ID: 0x%02X\n", Param[0]);
+    StdOutPrintf("ps2mouse: IntelliMouse ID: 0x%02X\n", Param[0]);
     
     if (Param[0] == 0x03) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: IntelliMouse detected (wheel)\n");
+        StdOutPrintf("ps2mouse: IntelliMouse detected (wheel)\n");
         return PS2_MOUSE_INTELLIMOUSE;
     }
     
     // Trying Explorer: 200, 200, 80
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: trying Explorer...\n");
+    StdOutPrintf("ps2mouse: trying Explorer...\n");
     
     Ps2MouseCommandWithData(PS2_MOUSE_CMD_SETRATE, 200);
     Ps2MouseCommandWithData(PS2_MOUSE_CMD_SETRATE, 200);
@@ -311,7 +312,7 @@ STATIC INT Ps2MouseDetectType(VOID) {
     
     // We update here too
     Ps2MouseCommandRead(PS2_MOUSE_CMD_GETID, Param, 1);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: Explorer ID: 0x%02X\n", Param[0]);
+    StdOutPrintf("ps2mouse: Explorer ID: 0x%02X\n", Param[0]);
     
     if (Param[0] == 0x04) {
         // Enable horizontal scrolling
@@ -319,11 +320,11 @@ STATIC INT Ps2MouseDetectType(VOID) {
         Ps2MouseCommandWithData(PS2_MOUSE_CMD_SETRATE, 80);
         Ps2MouseCommandWithData(PS2_MOUSE_CMD_SETRATE, 40);
         
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: Explorer mouse detected\n");
+        StdOutPrintf("ps2mouse: Explorer mouse detected\n");
         return PS2_MOUSE_EXPLORER;
     }
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: standard PS/2 mouse\n");
+    StdOutPrintf("ps2mouse: standard PS/2 mouse\n");
     return PS2_MOUSE_STANDARD;
 }
 
@@ -346,7 +347,7 @@ STATIC VOID ProcessMousePacket(VOID) {
     if (!(Packet[0] & 0x08)) {
         GMouse.OutOfSyncCount++;
         if (GMouse.OutOfSyncCount > 5) {
-            BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: too many sync errors, resetting\n");
+            StdOutPrintf("ps2mouse: too many sync errors, resetting\n");
             GMouse.State = PS2_MOUSE_STATE_IGNORE;
         }
         return;
@@ -443,7 +444,7 @@ VOID Ps2MouseHandleByte(UINT8 Byte) {
             }
             if (GMouse.PacketIndex == 1 && GMouse.Packet[0] == PS2_MOUSE_RET_BAT) {
                 if (Byte == PS2_MOUSE_RET_ID) {
-                    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: device reconnected\n");
+                    StdOutPrintf("ps2mouse: device reconnected\n");
                     GMouse.State = PS2_MOUSE_STATE_IGNORE;
                     // TODO: reinitialization
                     return;
@@ -466,7 +467,7 @@ VOID Ps2MouseHandleByte(UINT8 Byte) {
             GMouse.OutOfSyncCount++;
             
             if (GMouse.OutOfSyncCount > 5) {
-                BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: lost sync, bad byte 0x%02X\n", Byte);
+                StdOutPrintf("ps2mouse: lost sync, bad byte 0x%02X\n", Byte);
                 GMouse.State = PS2_MOUSE_STATE_RESYNCING;
             }
             return;
@@ -518,17 +519,17 @@ INT Ps2MouseInit(VOID) {
         RETURN(SUCCESS);
     }
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: initializing...\n");
+    StdOutPrintf("ps2mouse: initializing...\n");
     
     // Checking the controller
     Ps2Controller *Ctrl = Ps2GetController();
     if (!Ctrl || !Ctrl->Initialized) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: controller not initialized!\n");
+        StdOutPrintf("ps2mouse: controller not initialized!\n");
         RETURN(NO_OBJECT);
     }
     
     if (!Ps2IsMousePresent()) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: mouse not present!\n");
+        StdOutPrintf("ps2mouse: mouse not present!\n");
         RETURN(NO_OBJECT);
     }
     
@@ -544,7 +545,7 @@ INT Ps2MouseInit(VOID) {
     
     // Resetting the mouse
     if (!Ps2MouseReset()) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: reset failed!\n");
+        StdOutPrintf("ps2mouse: reset failed!\n");
         RETURN(DEVICE_ERROR);
     }
     
@@ -580,24 +581,24 @@ INT Ps2MouseInit(VOID) {
     GMouse.SampleRate = 100;
     
     // ====== Final cleanup ======
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: final flush...\n");
+    StdOutPrintf("ps2mouse: final flush...\n");
     Ps2MouseFlushBuffer();
     TimerMdelay(10);
     
     INT FlushedBytes = 0;
     while (Inb(PS2_PORT_STATUS) & PS2_STATUS_OUTPUT_FULL) {
         UINT8 Garbage = Inb(PS2_PORT_DATA);
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: garbage: 0x%02X\n", Garbage);
+        StdOutPrintf("ps2mouse: garbage: 0x%02X\n", Garbage);
         FlushedBytes++;
     }
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: flushed %d bytes\n", FlushedBytes);
+    StdOutPrintf("ps2mouse: flushed %d bytes\n", FlushedBytes);
     
     // Resetting the package index
     GMouse.PacketIndex = 0;
     
     // ====== Enable data flow ======
     if (!Ps2MouseSimpleCommand(PS2_MOUSE_CMD_ENABLE)) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: enable failed!\n");
+        StdOutPrintf("ps2mouse: enable failed!\n");
         RETURN(DEVICE_ERROR);
     }
     
@@ -624,7 +625,7 @@ INT Ps2MouseInit(VOID) {
     
     Result = IoapicRedirectIrq(Gsi, MOUSE, ApicGetId(), Flags);
     if (IsError(Result).IsError) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: ioapic redirect failed!\n");
+        StdOutPrintf("ps2mouse: ioapic redirect failed!\n");
         RETURN(DEVICE_ERROR);
     }
     
@@ -632,9 +633,9 @@ INT Ps2MouseInit(VOID) {
 
     Ps2MouseRegisterSysDevice();
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: irq: gsi=%d, vector=%d\n", Gsi, MOUSE);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: initialized successfully!\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ps2mouse: type: %s, packetsize=%d, resolution=%d dpi, rate=%d Hz\n",
+    StdOutPrintf("ps2mouse: irq: gsi=%d, vector=%d\n", Gsi, MOUSE);
+    StdOutPrintf("ps2mouse: initialized successfully!\n");
+    StdOutPrintf("ps2mouse: type: %s, packetsize=%d, resolution=%d dpi, rate=%d Hz\n",
                   GMouse.Type == PS2_MOUSE_STANDARD ? "Standard" :
                   GMouse.Type == PS2_MOUSE_INTELLIMOUSE ? "IntelliMouse" :
                   GMouse.Type == PS2_MOUSE_EXPLORER ? "Explorer" : "Unknown",

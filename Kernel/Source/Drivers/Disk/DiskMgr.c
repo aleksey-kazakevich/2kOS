@@ -2,17 +2,19 @@
 #include <Drivers/Disk/RamDisk.h>
 #include <Drivers/Disk/Pata.h>
 #include <Drivers/Disk/Sata.h>
-#include <Fs/Fat32.h>
-#include <Fs/Exfat.h>
-#include <Fs/Iso9660.h>
-#include <Fs/Vfs.h>
 #include <Mem/Allocator.h>
 #include <Mem/PageCache.h>
+#include <Fs/Iso9660.h>
 #include <Lib/String.h>
+#include <Io/StdWarn.h>
 #include <Lib/StdIo.h>
+#include <Io/StdErr.h>
+#include <Io/StdOut.h>
 #include <SpinLock.h>
-#include <Basecon.h>
+#include <Fs/Fat32.h>
+#include <Fs/Exfat.h>
 #include <Asm/Cpu.h>
+#include <Fs/Vfs.h>
 #include <Return.h>
 
 /* ============================================================================
@@ -510,8 +512,7 @@ STATIC INT PartitionScanMBRLocked(Disk *Disk) {
                     ListAddTail(&Disk->LogicalPartitions, &Part->Node);
                     Disk->LogicalCount++;
 
-                    BaseconPrintf(BASECON_TYPE_NORMAL,
-                                  "diskmgr: logical %s: start=0x%llX, size=%lluMB, type=%s\n",
+                    StdOutPrintf("diskmgr: logical %s: start=0x%llX, size=%lluMB, type=%s\n",
                                   Part->Name, Part->StartLba,
                                   Part->SizeInBytes / (1024 * 1024),
                                   PartitionTypeToString(Part->Type));
@@ -553,8 +554,7 @@ STATIC INT PartitionScanMBRLocked(Disk *Disk) {
         ListAddTail(&Disk->Partitions, &Part->Node);
         Disk->PartitionCount++;
 
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "diskmgr: partition %s: start=0x%llX, size=%lluMB, type=%s%s\n",
+        StdOutPrintf("diskmgr: partition %s: start=0x%llX, size=%lluMB, type=%s%s\n",
                       Part->Name, Part->StartLba,
                       Part->SizeInBytes / (1024 * 1024),
                       PartitionTypeToString(Part->Type),
@@ -786,8 +786,7 @@ STATIC INT GptReadHeader(Disk *Disk, GptHeader *Out) {
     Tmp.HeaderCrc32 = 0;
     UINT32 CalcCrc = Crc32(&Tmp, Out->HeaderSize);
     if (CalcCrc != SavedCrc) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "diskmgr: GPT header CRC mismatch (0x%08X vs 0x%08X)\n",
+        StdWarnPrintf("diskmgr: GPT header CRC mismatch (0x%08X vs 0x%08X)\n",
                       CalcCrc, SavedCrc);
     }
 
@@ -809,8 +808,7 @@ STATIC INT GptReadEntries(Disk *Disk, const GptHeader *Hdr,
 
     UINT32 CalcCrc = Crc32(Buf, Len);
     if (CalcCrc != Hdr->PartitionEntryArrayCrc32) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "diskmgr: GPT entries CRC mismatch (0x%08X vs 0x%08X)\n",
+        StdWarnPrintf("diskmgr: GPT entries CRC mismatch (0x%08X vs 0x%08X)\n",
                       CalcCrc, Hdr->PartitionEntryArrayCrc32);
     }
 
@@ -827,8 +825,7 @@ STATIC INT PartitionScanGPTLocked(Disk *Disk) {
     INT Rc = GptReadHeader(Disk, &Hdr);
     if (Rc != SUCCESS) RETURN(Rc);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "diskmgr: GPT: %u entries, entry_size=%u, table_lba=%llu\n",
+    StdOutPrintf("diskmgr: GPT: %u entries, entry_size=%u, table_lba=%llu\n",
                   Hdr.NumberOfPartitionEntries,
                   Hdr.SizeOfPartitionEntry,
                   Hdr.PartitionEntryLba);
@@ -876,15 +873,13 @@ STATIC INT PartitionScanGPTLocked(Disk *Disk) {
         Disk->PartitionCount++;
 
         if (Part->Label[0]) {
-            BaseconPrintf(BASECON_TYPE_NORMAL,
-                          "diskmgr: gpt %s: start=%llu, size=%lluMB, type=%s, label='%s'\n",
+            StdOutPrintf("diskmgr: gpt %s: start=%llu, size=%lluMB, type=%s, label='%s'\n",
                           Part->Name, Part->StartLba,
                           Part->SizeInBytes / (1024 * 1024),
                           PartitionTypeToString(Part->Type),
                           Part->Label);
         } else {
-            BaseconPrintf(BASECON_TYPE_NORMAL,
-                          "diskmgr: gpt %s: start=%llu, size=%lluMB, type=%s\n",
+            StdOutPrintf("diskmgr: gpt %s: start=%llu, size=%lluMB, type=%s\n",
                           Part->Name, Part->StartLba,
                           Part->SizeInBytes / (1024 * 1024),
                           PartitionTypeToString(Part->Type));
@@ -893,8 +888,7 @@ STATIC INT PartitionScanGPTLocked(Disk *Disk) {
 
     MemoryFree(Table);
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS,
-                  "diskmgr: GPT parsed, %u partition(s)\n", Disk->PartitionCount);
+    StdOutPrintf("diskmgr: GPT parsed, %u partition(s)\n", Disk->PartitionCount);
     RETURN(SUCCESS);
 }
 
@@ -916,8 +910,7 @@ STATIC INT PartitionScanLocked(Disk *Disk) {
     MBRPartitionTable *Table = (MBRPartitionTable *)MBR;
 
     if (Table->Signature != 0xAA55) {
-        BaseconPrintf(BASECON_TYPE_INFO,
-                      "diskmgr: %s: no MBR/GPT signature at LBA 0\n",
+        StdOutPrintf("diskmgr: %s: no MBR/GPT signature at LBA 0\n",
                       Disk->Name);
         DiskClearPartitionsLocked(Disk);
         Disk->PartScheme = DISK_PART_SCHEME_NONE;
@@ -934,15 +927,13 @@ STATIC INT PartitionScanLocked(Disk *Disk) {
     }
 
     if (HasProtective) {
-        BaseconPrintf(BASECON_TYPE_INFO,
-                      "diskmgr: %s: protective MBR, trying GPT...\n",
+        StdOutPrintf("diskmgr: %s: protective MBR, trying GPT...\n",
                       Disk->Name);
 
         Rc = PartitionScanGPTLocked(Disk);
         if (Rc == SUCCESS) return SUCCESS;
 
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "diskmgr: %s: GPT parse failed (%d), MBR fallback\n",
+        StdWarnPrintf("diskmgr: %s: GPT parse failed (%d), MBR fallback\n",
                       Disk->Name, Rc);
     }
 
@@ -966,8 +957,7 @@ STATIC INT PartitionCreateGPTLocked(Disk *Disk, UINT64 StartLba,
     GptHeader Hdr;
     INT Rc = GptReadHeader(Disk, &Hdr);
     if (Rc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "diskmgr: %s: cannot read GPT header (%d)\n",
+        StdErrPrintf("diskmgr: %s: cannot read GPT header (%d)\n",
                       Disk->Name, Rc);
         RETURN(Rc);
     }
@@ -999,7 +989,7 @@ STATIC INT PartitionCreateGPTLocked(Disk *Disk, UINT64 StartLba,
 
     if (FreeIdx < 0) {
         MemoryFree(Table);
-        BaseconPrintf(BASECON_TYPE_ERROR, "diskmgr: no free GPT slots\n");
+        StdErrPrintf("diskmgr: no free GPT slots\n");
         RETURN(NO_MEMORY);
     }
 
@@ -1060,8 +1050,7 @@ STATIC INT PartitionCreateGPTLocked(Disk *Disk, UINT64 StartLba,
 
     if (Disk->Flush) Disk->Flush(Disk);
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS,
-                  "diskmgr: GPT partition created at LBA %llu (%llu sectors)\n",
+    StdOutPrintf("diskmgr: GPT partition created at LBA %llu (%llu sectors)\n",
                   StartLba, SectorCount);
 
     PartitionScanGPTLocked(Disk);
@@ -1238,8 +1227,7 @@ STATIC INT GptInitDiskLocked(Disk *Disk) {
 
     if (Disk->Flush) Disk->Flush(Disk);
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS,
-                  "diskmgr: GPT initialized on %s (usable %llu..%llu)\n",
+    StdOutPrintf("diskmgr: GPT initialized on %s (usable %llu..%llu)\n",
                   Disk->Name, FirstUsable, LastUsable);
 
     PartitionScanGPTLocked(Disk);
@@ -1305,8 +1293,7 @@ STATIC INT PartitionCreateMBRLocked(Disk *Disk, UINT64 StartLba,
     if (Result != SUCCESS) RETURN(Result);
 
     PartitionScanMBRLocked(Disk);
-    BaseconPrintf(BASECON_TYPE_SUCCESS,
-                  "diskmgr: MBR partition created on %s\n", Disk->Name);
+    StdOutPrintf("diskmgr: MBR partition created on %s\n", Disk->Name);
     RETURN(SUCCESS);
 }
 
@@ -1340,8 +1327,7 @@ STATIC INT PartitionDeleteMBRLocked(Disk *Disk, UINT32 PartitionIndex) {
     if (Result != SUCCESS) RETURN(Result);
 
     PartitionScanMBRLocked(Disk);
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "diskmgr: MBR partition %u deleted from %s\n",
+    StdOutPrintf("diskmgr: MBR partition %u deleted from %s\n",
                   PartitionIndex, Disk->Name);
     RETURN(SUCCESS);
 }
@@ -1405,8 +1391,7 @@ INT DiskCfgApplyToDisk(Disk *D) {
 
     if (Cfg.Stale) {
         D->CfgStale = TRUE;
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "diskcg: %s: id mismatch, config ignored\n",
+        StdWarnPrintf("diskcg: %s: id mismatch, config ignored\n",
                       D->Name);
         RETURN(INCORRECT_VALUE);
     }
@@ -1416,20 +1401,20 @@ INT DiskCfgApplyToDisk(Disk *D) {
     if (Cfg.Name[0]) {
         if (!DiskCfgAliasExists(Cfg.Name, D, NULLPTR)) {
             StrnCpy(D->Alias, Cfg.Name, sizeof(D->Alias) - 1);
-            BaseconPrintf(BASECON_TYPE_NORMAL,
-                          "diskcg: %s: alias '%s'\n",
-                          D->Name, D->Alias);
+            D->Alias[sizeof(D->Alias) - 1] = '\0';
+
+            /* Try to rename the disk to the alias. If the alias is
+             * already taken (race or duplicate), keep the current name. */
+            DiskRename(D, D->Alias);
         } else {
-            BaseconPrintf(BASECON_TYPE_WARNING,
-                          "diskcg: %s: alias '%s' already used, ignored\n",
+            StdErrPrintf("diskcg: %s: alias '%s' already used, ignored\n",
                           D->Name, Cfg.Name);
         }
     }
 
     D->IsRoot = Cfg.IsRoot;
     if (D->IsRoot) {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "diskcg: %s: is_root=1\n", D->Name);
+        StdOutPrintf("diskcg: %s: is_root=1\n", D->Name);
     }
 
     RETURN(SUCCESS);
@@ -1461,8 +1446,7 @@ INT DiskCfgApplyToPartition(Partition *P) {
 
     if (Cfg.Stale) {
         P->CfgStale = TRUE;
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "diskcg: %s: id mismatch, config ignored\n",
+        StdWarnPrintf("diskcg: %s: id mismatch, config ignored\n",
                       P->Name);
         RETURN(INCORRECT_VALUE);
     }
@@ -1472,20 +1456,17 @@ INT DiskCfgApplyToPartition(Partition *P) {
     if (Cfg.Name[0]) {
         if (!DiskCfgAliasExists(Cfg.Name, NULLPTR, P)) {
             StrnCpy(P->Alias, Cfg.Name, sizeof(P->Alias) - 1);
-            BaseconPrintf(BASECON_TYPE_NORMAL,
-                          "diskcg: %s: alias '%s'\n",
+            StdOutPrintf("diskcg: %s: alias '%s'\n",
                           P->Name, P->Alias);
         } else {
-            BaseconPrintf(BASECON_TYPE_WARNING,
-                          "diskcg: %s: alias '%s' already used, ignored\n",
+            StdWarnPrintf("diskcg: %s: alias '%s' already used, ignored\n",
                           P->Name, Cfg.Name);
         }
     }
 
     P->IsRoot = Cfg.IsRoot;
     if (P->IsRoot) {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "diskcg: %s: is_root=1\n", P->Name);
+        StdOutPrintf("diskcg: %s: is_root=1\n", P->Name);
     }
 
     RETURN(SUCCESS);
@@ -1514,8 +1495,7 @@ BOOL DiskCfgAliasExists(const CHAR *Alias, Disk *SelfD, Partition *SelfP) {
 
 VOID DiskCfgMountRoots(VOID) {
     if (!VfsRootInode) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "diskcg: VFS not ready, cannot mount roots\n");
+        StdWarnPrintf("diskcg: VFS not ready, cannot mount roots\n");
         return;
     }
 
@@ -1536,10 +1516,9 @@ VOID DiskCfgMountRoots(VOID) {
 
                 if (FsName) {
                     VfsInode *Root = NULLPTR;
-                    INT Rc = VfsMount(FsName, D, 0, D->SectorCount, &Root);
+                    INT Rc = VfsMountEx(FsName, D, 0, D->SectorCount, D->Name, &Root);
                     if (Rc == SUCCESS) {
-                        BaseconPrintf(BASECON_TYPE_SUCCESS,
-                                      "diskcg: mounted %s (is_root)\n",
+                        StdOutPrintf("diskcg: mounted %s (is_root)\n",
                                       D->Name);
                         VfsInodeUnref(Root);
 			if (Mounted == 0) {
@@ -1548,8 +1527,7 @@ VOID DiskCfgMountRoots(VOID) {
                         }
                         Mounted++;
                     } else {
-                        BaseconPrintf(BASECON_TYPE_ERROR,
-                                      "diskcg: %s: mount failed (%d)\n",
+                        StdErrPrintf("diskcg: %s: mount failed (%d)\n",
                                       D->Name, Rc);
                         Errors++;
                     }
@@ -1567,10 +1545,9 @@ VOID DiskCfgMountRoots(VOID) {
             if (!FsName) continue;
 
             VfsInode *Root = NULLPTR;
-            INT Rc = VfsMount(FsName, D, P->StartLba, P->SectorCount, &Root);
+            INT Rc = VfsMountEx(FsName, D, P->StartLba, P->SectorCount, P->Name, &Root);
             if (Rc == SUCCESS) {
-                BaseconPrintf(BASECON_TYPE_SUCCESS,
-                              "diskcg: mounted %s (is_root)\n", P->Name);
+                StdOutPrintf("diskcg: mounted %s (is_root)\n", P->Name);
                 VfsInodeUnref(Root);
 		if (Mounted == 0) {
                     StrnCpy(FirstMountedName, P->Name,
@@ -1578,8 +1555,7 @@ VOID DiskCfgMountRoots(VOID) {
                 }
                 Mounted++;
             } else {
-                BaseconPrintf(BASECON_TYPE_ERROR,
-                              "diskcg: %s: mount failed (%d)\n",
+                StdErrPrintf("diskcg: %s: mount failed (%d)\n",
                               P->Name, Rc);
                 Errors++;
             }
@@ -1597,8 +1573,7 @@ VOID DiskCfgMountRoots(VOID) {
             VfsInode *Root = NULLPTR;
             INT Rc = VfsMount(FsName, D, P->StartLba, P->SectorCount, &Root);
             if (Rc == SUCCESS) {
-                BaseconPrintf(BASECON_TYPE_SUCCESS,
-                              "diskcg: mounted %s (is_root)\n", P->Name);
+                StdOutPrintf("diskcg: mounted %s (is_root)\n", P->Name);
                 VfsInodeUnref(Root);
 		if (Mounted == 0) {
                     StrnCpy(FirstMountedName, P->Name,
@@ -1607,8 +1582,7 @@ VOID DiskCfgMountRoots(VOID) {
 
                 Mounted++;
             } else {
-                BaseconPrintf(BASECON_TYPE_ERROR,
-                              "diskcg: %s: mount failed (%d)\n",
+                StdErrPrintf("diskcg: %s: mount failed (%d)\n",
                               P->Name, Rc);
                 Errors++;
             }
@@ -1618,11 +1592,9 @@ VOID DiskCfgMountRoots(VOID) {
     }
 
     if (Mounted == 0 && Errors == 0) {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "diskcg: no is_root volumes\n");
+        StdOutPrintf("diskcg: no is_root volumes\n");
     } else {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "diskcg: mounted %d root volume(s)\n", Mounted);
+        StdOutPrintf("diskcg: mounted %d root volume(s)\n", Mounted);
 	if (FirstMountedName[0]) {
             VfsCd(&VfsCurrentDir, FirstMountedName);
         }
@@ -1635,12 +1607,11 @@ VOID DiskCfgMountRoots(VOID) {
 
 VOID DiskCfgInit(VOID) {
     if (!VfsRootInode) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "diskcg: VFS not ready, cannot read cfgs\n");
+        StdWarnPrintf("diskcg: VFS not ready, cannot read cfgs\n");
         return;
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "diskcg: reading disk.cfg...\n");
+    StdOutPrintf("diskcg: reading disk.cfg...\n");
 
     Disk *D = DiskMgrGetFirst();
     while (D) {
@@ -1675,7 +1646,7 @@ VOID DiskMgrInit(VOID) {
     GptRngSeed();
     SpinLockReleaseIrq(&GDiskLock, Flags);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "diskmgr: initialized\n");
+    StdOutPrintf("diskmgr: initialized\n");
 }
 
 INT DiskMgrRegisterDisk(Disk *Disk) {
@@ -1709,8 +1680,7 @@ INT DiskMgrRegisterDisk(Disk *Disk) {
         PartitionScanLocked(Disk);
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "diskmgr: registered %s (%lluMB, %s, %u partitions)\n",
+    StdOutPrintf("diskmgr: registered %s (%lluMB, %s, %u partitions)\n",
                   Disk->Name,
                   Disk->TotalSize / (1024 * 1024),
                   DiskPartSchemeToString(Disk->PartScheme),
@@ -1747,6 +1717,10 @@ INT DiskMgrUnregisterDisk(Disk *Dsk) {
                 if (Sd) SysDeviceDestroy(Sd);
             }
 
+	    if (Dsk->Destroy) {
+                Dsk->Destroy(Dsk);
+            }
+
             return SUCCESS;
         }
     }
@@ -1762,8 +1736,7 @@ INT DiskMgrUnregisterDisk(Disk *Dsk) {
 INT DiskMgrInitSata(VOID) {
     INT Result = SataInit();
     if (Result != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "diskmgr: SATA init failed (error %d)\n", Result);
+        StdOutPrintf("diskmgr: SATA init failed (error %d)\n", Result);
         return Result;
     }
 
@@ -1775,8 +1748,7 @@ INT DiskMgrInitSata(VOID) {
             Registered++;
         }
     }
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "diskmgr: %d SATA disks found\n", Registered);
+    StdOutPrintf("diskmgr: %d SATA disks found\n", Registered);
     return SUCCESS;
 }
 
@@ -1785,7 +1757,7 @@ VOID DiskMgrInitDisks(VOID) {
 
     EXTERN(PataDrive, PataDrives[4]);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "diskmgr: scanning disks...\n");
+    StdOutPrintf("diskmgr: scanning disks...\n");
 
     INT PataFoundCount = 0;
     for (INT Ch = 0; Ch < 2; Ch++) {
@@ -1797,8 +1769,7 @@ VOID DiskMgrInitDisks(VOID) {
             }
         }
     }
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "diskmgr: %d PATA/IDE disks found\n", PataFoundCount);
+    StdOutPrintf("diskmgr: %d PATA/IDE disks found\n", PataFoundCount);
 
     DiskMgrInitSata();
     RamDiskInit();
@@ -1922,7 +1893,7 @@ UINT32 DiskMgrRegisterSysDevices(VOID) {
     }
 
     if (!SysDeviceGetRoot()) {
-        BaseconPrintf(BASECON_TYPE_WARNING, "diskmgr: SysDevice not ready\n");
+        StdWarnPrintf("diskmgr: SysDevice not ready\n");
         return 0;
     }
 
@@ -1943,4 +1914,66 @@ UINT32 DiskMgrRegisterSysDevices(VOID) {
         D = DiskMgrGetNext(D);
     }
     return Count;
+}
+
+INT DiskRename(Disk *D, const CHAR *NewName) {
+    if (!D || !NewName || !NewName[0]) RETURN(INCORRECT_VALUE);
+    if (StrCmp(D->Name, NewName) == 0) RETURN(SUCCESS);
+
+    /* Check: is the name already taken? */
+    if (DiskMgrFindDisk(NewName)) {
+        RETURN(ALREADY_EXISTS);
+    }
+
+    /* Save old name */
+    CHAR OldName[DRIVE_NAME_MAX];
+    StrnCpy(OldName, D->Name, sizeof(OldName) - 1);
+    OldName[sizeof(OldName) - 1] = '\0';
+
+    /* Rename the disk */
+    StrnCpy(D->Name, NewName, sizeof(D->Name) - 1);
+    D->Name[sizeof(D->Name) - 1] = '\0';
+
+    /* Rename all partitions */
+    ListHead *Pos;
+    ListForEach(Pos, &D->Partitions) {
+        Partition *P = ListEntry(Pos, Partition, Node);
+        PartitionMakeName(P);
+    }
+    ListForEach(Pos, &D->LogicalPartitions) {
+        Partition *P = ListEntry(Pos, Partition, Node);
+        PartitionMakeName(P);
+    }
+
+    /* Rename SysDevice if it exists */
+    SysDevice *Sd = SysDeviceFind(OldName);
+    if (Sd) {
+        StrnCpy(Sd->Name, NewName, SYSDEV_NAME_MAX - 1);
+        Sd->Name[SYSDEV_NAME_MAX - 1] = '\0';
+    }
+
+    return SUCCESS;
+}
+
+INT MbrInitDisk(Disk *Disk) {
+    if (!Disk || !Disk->Write) RETURN(NO_OBJECT);
+    if (Disk->SectorSize < 512) RETURN(NOT_SUPPORTED);
+
+    UINT8 Sector0[512];
+    MemSet(Sector0, 0, sizeof(Sector0));
+    Sector0[510] = 0x55;
+    Sector0[511] = 0xAA;
+
+    INT Rc = Disk->Write(Disk, 0, 1, Sector0);
+    if (Rc != SUCCESS) return Rc;
+    if (Disk->Flush) Disk->Flush(Disk);
+
+    StdOutPrintf("diskmgr: MBR initialized on %s\n", Disk->Name);
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GDiskLock);
+    DiskClearPartitionsLocked(Disk);
+    Disk->PartScheme = DISK_PART_SCHEME_MBR;
+    SpinLockReleaseIrq(&GDiskLock, Flags);
+
+    RETURN(SUCCESS);
 }

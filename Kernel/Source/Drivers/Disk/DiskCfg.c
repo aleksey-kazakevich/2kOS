@@ -2,9 +2,9 @@
 #include <Mem/Allocator.h>
 #include <Lib/String.h>
 #include <Lib/StdIo.h>
+#include <Io/StdErr.h>
 #include <Fs/Fat32.h>
 #include <Fs/Exfat.h>
-#include <Basecon.h>
 #include <Return.h>
 #include <Fs/Vfs.h>
 
@@ -204,12 +204,15 @@ STATIC INT DiskCfg_ReadFileTemporary(Disk *D, UINT64 StartLba, UINT64 SectorCoun
     }
 
     VfsFile *F = NULLPTR;
-    Rc = VfsOpen(Root, DISKCFG_FILE_NAME, O_READ, &F);
+    Rc = VfsOpen(Root, DISKCFG_FILE_NAME, VFS_O_READ, &F);
     if (Rc != SUCCESS) {
         VfsUnmount(Root);
         if (SavedCwd) {
-            VfsInodeUnref(VfsCurrentDir);
+            VfsInode *Cur = VfsCurrentDir;
             VfsCurrentDir = SavedCwd;
+            if (Cur && Cur != SavedCwd) {
+                VfsInodeUnref(Cur);
+            }
             StrnCpy(VfsCurrentPath, SavedPath, PATH_MAX - 1);
             StrnCpy(VfsCurrentDrive, SavedDrive, DRIVE_NAME_MAX - 1);
         }
@@ -223,8 +226,11 @@ STATIC INT DiskCfg_ReadFileTemporary(Disk *D, UINT64 StartLba, UINT64 SectorCoun
     VfsUnmount(Root);
 
     if (SavedCwd) {
-        VfsInodeUnref(VfsCurrentDir);
+        VfsInode *Cur = VfsCurrentDir;
         VfsCurrentDir = SavedCwd;
+	if (Cur && Cur != SavedCwd) {
+            VfsInodeUnref(Cur);
+    	}
         StrnCpy(VfsCurrentPath, SavedPath, PATH_MAX - 1);
         StrnCpy(VfsCurrentDrive, SavedDrive, DRIVE_NAME_MAX - 1);
     }
@@ -285,8 +291,7 @@ INT DiskCfgWriteVolume(Disk *D, UINT64 StartLba, UINT64 SectorCount,
     CHAR Buf[512];
     INT Len = DiskCfgSerialize(&Cfg, Buf, sizeof(Buf));
     if (Len <= 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "diskcg: serialize failed (%d)\n", Len);
+        StdErrPrintf("diskcg: serialize failed (%d)\n", Len);
         RETURN(INCORRECT_VALUE);
     }
 
@@ -303,22 +308,23 @@ INT DiskCfgWriteVolume(Disk *D, UINT64 StartLba, UINT64 SectorCount,
     VfsInode *Root = NULLPTR;
     INT Rc = VfsMount(FsName, D, StartLba, SectorCount, &Root);
     if (Rc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "diskcg: VfsMount(%s) failed (%d)\n", FsName, Rc);
+        StdErrPrintf("diskcg: VfsMount(%s) failed (%d)\n", FsName, Rc);
         if (SavedCwd) VfsInodeUnref(SavedCwd);
         RETURN(Rc);
     }
 
     VfsFile *F = NULLPTR;
     Rc = VfsOpen(Root, DISKCFG_FILE_NAME,
-                 O_WRITE | O_CREAT | O_TRUNC, &F);
+                 VFS_O_WRITE | VFS_O_CREAT | VFS_O_TRUNC, &F);
     if (Rc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "diskcg: VfsOpen failed (%d)\n", Rc);
+        StdErrPrintf("diskcg: VfsOpen failed (%d)\n", Rc);
         VfsUnmount(Root);
         if (SavedCwd) {
-            VfsInodeUnref(VfsCurrentDir);
+            VfsInode *Cur = VfsCurrentDir;
             VfsCurrentDir = SavedCwd;
+            if (Cur && Cur != SavedCwd) {
+                VfsInodeUnref(Cur);
+            }
             StrnCpy(VfsCurrentPath, SavedPath, PATH_MAX - 1);
             StrnCpy(VfsCurrentDrive, SavedDrive, DRIVE_NAME_MAX - 1);
         }
@@ -332,15 +338,17 @@ INT DiskCfgWriteVolume(Disk *D, UINT64 StartLba, UINT64 SectorCount,
     VfsUnmount(Root);
 
     if (SavedCwd) {
-        VfsInodeUnref(VfsCurrentDir);
-        VfsCurrentDir = SavedCwd;
-        StrnCpy(VfsCurrentPath, SavedPath, PATH_MAX - 1);
-        StrnCpy(VfsCurrentDrive, SavedDrive, DRIVE_NAME_MAX - 1);
+    	VfsInode *Cur = VfsCurrentDir;
+    	VfsCurrentDir = SavedCwd;
+    	if (Cur && Cur != SavedCwd) {
+            VfsInodeUnref(Cur);
+    	}
+    	StrnCpy(VfsCurrentPath, SavedPath, PATH_MAX - 1);
+    	StrnCpy(VfsCurrentDrive, SavedDrive, DRIVE_NAME_MAX - 1);
     }
 
     if (Rc != SUCCESS || Wr != (UINT32)Len) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "diskcg: VfsWrite failed (rc=%d wr=%u/%d)\n",
+        StdErrPrintf("diskcg: VfsWrite failed (rc=%d wr=%u/%d)\n",
                       Rc, Wr, Len);
         RETURN(INCORRECT_VALUE);
     }

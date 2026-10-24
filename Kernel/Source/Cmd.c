@@ -3,9 +3,11 @@
 #include <Time/Timer.h>
 #include <Scheduler.h>
 #include <Lib/StdIo.h>
-#include <Basecon.h>
+#include <Io/StdErr.h>
 #include <Return.h>
+#include <Fs/Vfs.h>
 #include <Cmd.h>
+#include <Env.h>
 
 STATIC ListHead GCmdList;
 STATIC UINT32 GCmdCount = 0;
@@ -132,32 +134,54 @@ CmdCommand* CmdFind(const CHAR *Name) {
 INT CmdExecute(const CHAR *CmdLine) {
     if (!GInitialized || !CmdLine) RETURN(NO_OBJECT);
     if (!CmdLine[0]) RETURN(SUCCESS);
-    
-    // Copying the string for parsing
+
     CHAR Buffer[256];
     StrnCpy(Buffer, CmdLine, sizeof(Buffer) - 1);
     Buffer[sizeof(Buffer) - 1] = '\0';
     CmdStripNewline(Buffer);
-    
-    // Parsimony arguments
+
     const CHAR *ArgV[16];
     INT ArgC = CmdParseArguments(Buffer, ArgV, 16);
     if (ArgC <= 0) RETURN(INCORRECT_VALUE);
-    
-    // Looking for a command
+
+    /* Builtin command? */
     CmdCommand *Cmd = CmdFind(ArgV[0]);
-    if (!Cmd) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "command not found: %s\n", ArgV[0]);
+    if (Cmd) {
+        INT Result = Cmd->Handler(ArgC, ArgV);
+        CmdFreeArguments(ArgC, ArgV);
+        return Result;
+    }
+
+    /*
+     * Not a builtin — resolve ArgV[0] through PATH
+     * (set by /etc/env.conf), then fall back to cwd.
+     */
+    CHAR ElfPath[PATH_MAX];
+    if (EnvResolveExec(ArgV[0], ElfPath, sizeof(ElfPath)) != SUCCESS) {
+        StdErrPrintf("command not found: %s\n", ArgV[0]);
         CmdFreeArguments(ArgC, ArgV);
         RETURN(NOT_FOUND);
     }
-    
-    // Executing
-    INT Result = Cmd->Handler(ArgC, ArgV);
-    
-    // Freeing up memory
+
+    /* Dispatch through "run" so ELF loading stays in one place. */
+    CmdCommand *Run = CmdFind("run");
+    if (!Run) {
+        StdErrPrintf("internal: 'run' command not registered\n");
+        CmdFreeArguments(ArgC, ArgV);
+        RETURN(NOT_FOUND);
+    }
+
+    const CHAR *RunArgV[16];
+    INT RunArgC = 0;
+    RunArgV[RunArgC++] = "run";
+    RunArgV[RunArgC++] = ElfPath;
+    for (INT I = 1; I < ArgC && RunArgC < 16; I++) {
+        RunArgV[RunArgC++] = ArgV[I];
+    }
+
+    INT Result = Run->Handler(RunArgC, RunArgV);
+
     CmdFreeArguments(ArgC, ArgV);
-    
     return Result;
 }
 

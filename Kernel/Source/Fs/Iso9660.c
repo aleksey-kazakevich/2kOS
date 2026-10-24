@@ -2,7 +2,8 @@
 #include <Mem/Allocator.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
-#include <Basecon.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Fs/Iso9660.h>
 #include <Return.h>
 
@@ -115,8 +116,7 @@ STATIC VOID IsoScanVolumeDescriptors(IsoContext *Ctx) {
                     Ctx->HasJoliet = TRUE;
                     Ctx->JolietRootLba = Root->ExtentLbaLE;
                     Ctx->JolietRootSize = Root->DataLengthLE;
-                    BaseconPrintf(BASECON_TYPE_NORMAL,
-                                  "iso9660: Joliet SVD found at LBA %u\n", Lba);
+                    StdOutPrintf("iso9660: Joliet SVD found at LBA %u\n", Lba);
                 }
             }
         } else if (Type == ISO_VD_TYPE_BOOT) {
@@ -125,8 +125,7 @@ STATIC VOID IsoScanVolumeDescriptors(IsoContext *Ctx) {
                 ElToritoDescriptor *Et = (ElToritoDescriptor *)Buf;
                 Ctx->HasElTorito = TRUE;
                 Ctx->BootCatalogLba = Et->BootCatalogLbaLE;
-                BaseconPrintf(BASECON_TYPE_NORMAL,
-                              "iso9660: El Torito boot catalog at LBA %u\n",
+                StdOutPrintf("iso9660: El Torito boot catalog at LBA %u\n",
                               Ctx->BootCatalogLba);
             }
         }
@@ -387,7 +386,7 @@ STATIC VOID IsoDetectRockRidge(IsoContext *Ctx) {
     MemoryFree(Buf);
 
     if (Ctx->HasRockRidge) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "iso9660: Rock Ridge detected\n");
+        StdOutPrintf("iso9660: Rock Ridge detected\n");
     }
 }
 
@@ -737,7 +736,7 @@ STATIC INT IsoMount(Disk *Disk, UINT64 StartLba, UINT64 SectorCount, VfsInode **
     INT Rc = IsoReadSectors(Ctx, ISO_PVD_LBA, 1, &Ctx->Pvd);
     if (Rc != SUCCESS) { MemoryFree(Ctx); RETURN(Rc); }
     if (!IsoValidatePvd(&Ctx->Pvd)) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "iso9660: invalid PVD\n");
+        StdErrPrintf("iso9660: invalid PVD\n");
         MemoryFree(Ctx);
         RETURN(INCORRECT_VALUE);
     }

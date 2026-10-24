@@ -2,10 +2,12 @@
 #include <Drivers/Acpi/Acpi.h>
 #include <Drivers/Cpu/Cpu.h>
 #include <Lib/String.h>
+#include <Io/StdWarn.h>
 #include <Lib/StdIo.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <SysDevice.h>
 #include <Asm/Cpu.h>
-#include <Basecon.h>
 #include <Return.h>
 
 // ============================================================================
@@ -139,14 +141,12 @@ INT CpuInit(VOID) {
 
     // 1. Vendor
     ReadVendorString(GCpuInfo.VendorString, sizeof(GCpuInfo.VendorString));
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "cpu: vendor '%s'\n", GCpuInfo.VendorString);
+    StdOutPrintf("cpu: vendor '%s'\n", GCpuInfo.VendorString);
 
     // 2. Find the backend
     GActiveBackend = FindBackend(GCpuInfo.VendorString);
     if (!GActiveBackend) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "cpu: no backend for vendor '%s'\n",
+        StdWarnPrintf("cpu: no backend for vendor '%s'\n",
                       GCpuInfo.VendorString);
         GCpuInfo.Vendor = CPU_VENDOR_UNKNOWN;
         RETURN(NOT_SUPPORTED);
@@ -158,8 +158,7 @@ INT CpuInit(VOID) {
     // 3. The backend fills up CpuInfo
     INT Rc = GActiveBackend->Init(&GCpuInfo);
     if (Rc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "cpu: backend init failed (%d)\n", Rc);
+        StdErrPrintf("cpu: backend init failed (%d)\n", Rc);
         RETURN(Rc);
     }
 
@@ -168,8 +167,7 @@ INT CpuInit(VOID) {
     // 4. We register in SysDevice
     GCpuInfo.SysDev = RegisterSysDevice(&GCpuInfo);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "cpu: %s (family %u, model %u, stepping %u)\n",
+    StdOutPrintf("cpu: %s (family %u, model %u, stepping %u)\n",
                   GCpuInfo.Brand,
                   GCpuInfo.Version.Family,
                   GCpuInfo.Version.Model,

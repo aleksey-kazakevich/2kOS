@@ -132,6 +132,9 @@ def prepare_iso_root_bios(iso_root):
         # Копируем с сохранением прав (важно!)
         shutil.copy2(src, iso_root / f)
         log_info(f"Copied {f} ({src.stat().st_size} bytes)")
+        
+    shutil.copy(tools_dir / "limine.conf", iso_root / "limine.conf")
+    shutil.copy(tools_dir / "USER.iso", iso_root / "USER.iso")
 
     # Копируем ядро
     kernel_src = Path(PROJECT_ROOT) / "Kernel" / "Bin" / "kernel"
@@ -154,6 +157,8 @@ def prepare_iso_root_uefi(iso_root):
     
     # 1. Кладем конфиг и ядро в корень ISO
     shutil.copy(tools_dir / "limine.conf", iso_root / "limine.conf")
+    
+    shutil.copy(tools_dir / "USER.iso", iso_root / "USER.iso")
     
     kernel_src = Path(PROJECT_ROOT) / "Kernel" / "Bin" / "kernel"
     if not kernel_src.exists():

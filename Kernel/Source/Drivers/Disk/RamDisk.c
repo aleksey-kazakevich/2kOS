@@ -3,7 +3,8 @@
 #include <Mem/PhysAlloc.h>
 #include <Mem/Paging.h>
 #include <Lib/String.h>
-#include <Basecon.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <KDriver.h>
 #include <Return.h>
 
@@ -81,14 +82,13 @@ Disk *RamDiskCreate(const CHAR *Name, UINT64 SizeBytes) {
         }
     }
     if (Slot < 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "ramdisk: no free slots\n");
+        StdErrPrintf("ramdisk: no free slots\n");
         return NULLPTR;
     }
 
     VOID *Virt = PhysAllocAllocateRange(PhysAllocGet(), Pages);
     if (!Virt) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "ramdisk: cannot allocate %u pages (%llu MB)\n",
+        StdErrPrintf("ramdisk: cannot allocate %u pages (%llu MB)\n",
                       Pages, SizeBytes / (1024 * 1024));
         return NULLPTR;
     }
@@ -122,6 +122,8 @@ Disk *RamDiskCreate(const CHAR *Name, UINT64 SizeBytes) {
     D->Read = RamDiskRead;
     D->Write = RamDiskWrite;
     D->Flush = RamDiskFlush;
+    D->IsVirtual = FALSE;
+    D->Destroy   = (VOID (*)(Disk *))RamDiskDestroy;
 
     ListInit(&D->Partitions);
     ListInit(&D->LogicalPartitions);
@@ -132,12 +134,11 @@ Disk *RamDiskCreate(const CHAR *Name, UINT64 SizeBytes) {
         PhysAllocFreeRange(PhysAllocGet(), Virt, Pages);
         GRamDisks[Slot].VirtAddr = NULLPTR;
         MemoryFree(D);
-        BaseconPrintf(BASECON_TYPE_ERROR, "ramdisk: register failed (%d)\n", Ret);
+        StdErrPrintf("ramdisk: register failed (%d)\n", Ret);
         return NULLPTR;
     }
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS,
-                  "ramdisk: created %s (%llu MB, %u pages)\n",
+    StdOutPrintf("ramdisk: created %s (%llu MB, %u pages)\n",
                   Name, SizeBytes / (1024 * 1024), Pages);
     return D;
 }

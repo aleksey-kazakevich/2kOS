@@ -26,29 +26,15 @@ VOID InitStackProtector(VOID) {
 }
 
 VOID InitCmds(VOID) {
-    CmdEchoRegister();
-    CmdPowerRegister();
     CmdDiskMgrRegister();
     CmdFormatRegister();
     CmdMountRegister();
-    CmdUnmountRegister();
     CmdLsRegister();
-    CmdMkdirRegister();
-    CmdRmdirRegister();
-    CmdTouchRegister();
-    CmdRmRegister();
     CmdRamDiskRegister();
     CmdSysDevRegister();
     CmdRunRegister();
-    CmdCdRegister();
-    CmdWriteRegister();
-    CmdReadRegister();
     CmdAsmRegister();
-    CmdELogRegister();
-    CmdSLogRegister();
-    CmdHexDumpRegister();
-    CmdSmpInfoRegister();
-    CmdCopyRegister();
+    CmdUnmountRegister();
 }
 
 VOID InitFs(VOID) {
@@ -69,6 +55,46 @@ VOID CheckBootFlags(VOID) {
     }
 }
 
+STATIC VOID RegisterUserIso(VOID) {
+    if (CmdLineIsFlagSet("nomountuser") || CmdLineIsFlagSet("NOMOUNTUSER")) {
+        return;
+    }
+
+    /* Try a few likely module strings. */
+    struct limine_file *F = NULLPTR;
+
+    STATIC const CHAR *Candidates[] = {
+        "USER.iso",
+        "user.iso",
+        NULLPTR
+    };
+
+    for (INT I = 0; Candidates[I]; I++) {
+        /* Limine module "string" field is the exact string from limine.conf. */
+        F = LimineFindModuleByString(Candidates[I]);
+        if (F) break;
+        /* Also try matching by path (basename may be embedded). */
+        F = LimineFindModuleByPath(Candidates[I]);
+        if (F) break;
+    }
+
+    if (!F) {
+        StdWarnPrintf("useriso: USER.iso module not found, skipping\n");
+        return;
+    }
+
+    if (!F->address || F->size == 0) {
+        StdWarnPrintf("useriso: USER.iso module is empty, skipping\n");
+        return;
+    }
+
+    INT Rc = IsoRegisterFromMemory(F->address, F->size, "USER");
+    if (Rc != SUCCESS) {
+        StdErrPrintf("useriso: mount failed (%d)\n", Rc);
+        return;
+    }
+}
+
 VOID KMain(VOID) {
     UINT64 Cr4 = ReadCr4();
     Cr4 |= (1ULL << 9) | (1ULL << 10);
@@ -84,9 +110,13 @@ VOID KMain(VOID) {
     Framebuffer *FB = FramebufferGet();
     if (FB)
         BaseconInit(FB);
-	BaseconSetColors(RGB_GRAY, RGB_BLACK);
         BaseconClear();
         BaseconSetEnabled(FALSE);
+
+    KObjInit();
+    StdIoInit();
+    KObjInitNull();
+    KObjInitZero();
 
     CmdLineInit();
     CmdLineSet(LimineGetCmdLine());
@@ -94,13 +124,11 @@ VOID KMain(VOID) {
     CheckBootFlags();
 
     BOOL LoadedInUefi = IsUefi();
-    BaseconPrintf(BASECON_TYPE_INFO, "booted via limine:%s\n", LoadedInUefi ? "uefi" : "bios");
+    StdOutPrintf("booted via limine:%s\n", LoadedInUefi ? "uefi" : "bios");
 
     InitIdt();
     
     if (InitAcpiAndApic() != SUCCESS) Fatal("failed to initialize apic and acpi");
-
-    PciInit();
 
     CpuRegisterAllBackends();
     CpuInit();
@@ -115,6 +143,10 @@ VOID KMain(VOID) {
 
     PCacheInit();
 
+    PowerInit();
+
+    PciInit();
+
     LocalInterruptsEnable();
 
     ExceptionLogInit();
@@ -125,6 +157,8 @@ VOID KMain(VOID) {
     DiskMgrInitDisks();
 
     InitFs();
+
+    EnvInit();
 
     Ps2Init();
     Ps2KeyboardInit();
@@ -138,11 +172,13 @@ VOID KMain(VOID) {
     BaseconSetPrompt("2KOS> ");
 
     DiskCfgInit();
+    EnvLoadRoot();
+
+    RegisterUserIso();
 
     BaseconSetEnabled(TRUE);
-    BaseconClear();
-
     BaseconSetPromptFixed(TRUE);
+    BaseconClear();
     BaseconInputStart();
 
     for (;;);

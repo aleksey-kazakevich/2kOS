@@ -1,8 +1,12 @@
 #include <Drivers/Acpi/Acpi.h>
 #include <Drivers/Acpi/Aml.h>
 #include <Mem/Allocator.h>
+#include <Io/StdWarn.h>
+#include <Mem/Paging.h>
 #include <Lib/String.h>
 #include <Mem/Paging.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <SysDevice.h>
 #include <Lib/StdIo.h>
 #include <Asm/Cpu.h>
@@ -64,7 +68,7 @@ STATIC SDTHeader* AcpiFindTableInternal(const CHAR *Signature, INT Index) {
         UINT64 *Entries = (UINT64*)((UINTPTR)GAcpi.Xsdt + sizeof(SDTHeader));
         
         for (UINT32 I = 0; I < Count; I++) {
-            SDTHeader *H = (SDTHeader*)(UINTPTR)Entries[I];
+            SDTHeader *H = (SDTHeader*)(UINTPTR)PhysToVirt(Entries[I]);
             if (MemCmp(H->Signature, Signature, 4) == 0) {
                 if (Found == Index) {
                     if (AcpiChecksum(H, H->Length) == 0) {
@@ -79,7 +83,7 @@ STATIC SDTHeader* AcpiFindTableInternal(const CHAR *Signature, INT Index) {
         UINT32 *Entries = (UINT32*)((UINTPTR)GAcpi.Rsdt + sizeof(SDTHeader));
         
         for (UINT32 I = 0; I < Count; I++) {
-            SDTHeader *H = (SDTHeader*)(UINTPTR)Entries[I];
+            SDTHeader *H = (SDTHeader*)(UINTPTR)PhysToVirt(Entries[I]);
             if (MemCmp(H->Signature, Signature, 4) == 0) {
                 if (Found == Index) {
                     if (AcpiChecksum(H, H->Length) == 0) {
@@ -238,19 +242,19 @@ INT AcpiInit(UINT64 RsdpAddr) {
     if (!RsdpAddr) RETURN(NO_OBJECT);
     
     MemSet(&GAcpi, 0, sizeof(GAcpi));
-    GAcpi.Rsdp = (RSDPV2*)(UINTPTR)RsdpAddr;
+    GAcpi.Rsdp = (RSDPV2 *)(UINTPTR)RsdpAddr;
     
     if (!AcpiValidateRsdp(GAcpi.Rsdp)) {
         RETURN(NO_OBJECT);
     }
     
     if (GAcpi.UseXsdt) {
-        GAcpi.Xsdt = (XSDT*)(UINTPTR)GAcpi.Rsdp->XsdtAddress;
+         GAcpi.Xsdt = (XSDT *)(UINTPTR)PhysToVirt(GAcpi.Rsdp->XsdtAddress);
         if (AcpiChecksum(GAcpi.Xsdt, GAcpi.Xsdt->Header.Length) != 0) {
             RETURN(INCORRECT_VALUE);
         }
     } else {
-        GAcpi.Rsdt = (RSDT*)(UINTPTR)GAcpi.Rsdp->V1.RsdtAddress;
+        GAcpi.Rsdt = (RSDT *)(UINTPTR)PhysToVirt(GAcpi.Rsdp->V1.RsdtAddress);
         if (AcpiChecksum(GAcpi.Rsdt, GAcpi.Rsdt->Header.Length) != 0) {
             RETURN(INCORRECT_VALUE);
         }
@@ -263,9 +267,9 @@ INT AcpiInit(UINT64 RsdpAddr) {
     
     if (GAcpi.Fadt) {
         if (GAcpi.UseXsdt && GAcpi.Fadt->XDsdt) {
-            GAcpi.Dsdt = (SDTHeader*)(UINTPTR)GAcpi.Fadt->XDsdt;
+            GAcpi.Dsdt = (SDTHeader *)(UINTPTR)PhysToVirt(GAcpi.Fadt->XDsdt);
         } else if (GAcpi.Fadt->Dsdt) {
-            GAcpi.Dsdt = (SDTHeader*)(UINTPTR)GAcpi.Fadt->Dsdt;
+             GAcpi.Dsdt = (SDTHeader *)(UINTPTR)PhysToVirt(GAcpi.Fadt->Dsdt);
         }
     }
     
@@ -274,7 +278,7 @@ INT AcpiInit(UINT64 RsdpAddr) {
         UINT32 Count = (GAcpi.Xsdt->Header.Length - sizeof(SDTHeader)) / 8;
         UINT64 *Entries = (UINT64*)((UINTPTR)GAcpi.Xsdt + sizeof(SDTHeader));
         for (UINT32 I = 0; I < Count && GAcpi.SsdtCount < 16; I++) {
-            SDTHeader *Table = (SDTHeader*)(UINTPTR)Entries[I];
+            SDTHeader *Table = (SDTHeader *)(UINTPTR)PhysToVirt(Entries[I]);
             if (MemCmp(Table->Signature, "SSDT", 4) == 0) {
                 GAcpi.Ssdts[GAcpi.SsdtCount++] = Table;
             }
@@ -283,7 +287,7 @@ INT AcpiInit(UINT64 RsdpAddr) {
         UINT32 Count = (GAcpi.Rsdt->Header.Length - sizeof(SDTHeader)) / 4;
         UINT32 *Entries = (UINT32*)((UINTPTR)GAcpi.Rsdt + sizeof(SDTHeader));
         for (UINT32 I = 0; I < Count && GAcpi.SsdtCount < 16; I++) {
-            SDTHeader *Table = (SDTHeader*)(UINTPTR)Entries[I];
+            SDTHeader *Table = (SDTHeader *)(UINTPTR)PhysToVirt(Entries[I]);
             if (MemCmp(Table->Signature, "SSDT", 4) == 0) {
                 GAcpi.Ssdts[GAcpi.SsdtCount++] = Table;
             }
@@ -303,7 +307,7 @@ INT AcpiInit(UINT64 RsdpAddr) {
         AcpiParseMadt();
     }
 	
-	AmlInit(GAcpi.Dsdt, GAcpi.Ssdts, GAcpi.SsdtCount);
+    AmlInit(GAcpi.Dsdt, GAcpi.Ssdts, GAcpi.SsdtCount);
     
     KDriverRegister(KDriverGenerateStruct("ACPI", 0, TRUE, &GAcpi, NULLPTR));
 
@@ -482,7 +486,7 @@ STATIC VOID AcpiWritePm1Control(UINT8 SlpTyp) {
 // ============================================================================
 
 VOID AcpiReboot(VOID) {
-    //Calling _PTS(5) is not necessary, but some BIOSes expect
+    // Calling _PTS(5) is not necessary, but some BIOSes expect
     AmlValue Res;
     AmlValue Arg = AmlMakeInteger(5);
     AmlCallMethod("\\_PTS", 1, &Arg, &Res);

@@ -19,11 +19,14 @@
 #define FT_SYMLINK   7
 
 // Opening flags
-#define O_READ       1
-#define O_WRITE      2
-#define O_CREAT      4
-#define O_TRUNC      8
-#define O_APPEND     16
+#define VFS_O_READ      (1u << 16)   /* open for reading                  */
+#define VFS_O_WRITE     (1u << 17)   /* open for writing                  */
+#define VFS_O_CREAT     (1u << 18)   /* create the file if it is missing  */
+#define VFS_O_TRUNC     (1u << 19)   /* truncate to zero length on open   */
+#define VFS_O_APPEND    (1u << 20)   /* all writes go to the end of file  */
+#define VFS_O_EXCL      (1u << 21)   /* with VFS_O_CREAT: fail if exists  */
+
+#define VFS_O_ACCMODE   (VFS_O_READ | VFS_O_WRITE)
 
 #define PATH_MAX     4096
 #define NAME_MAX     255
@@ -156,7 +159,20 @@ const CHAR *VfsDetectFilesystemAt(Disk *Dev, UINT64 StartLba);
 const CHAR *VfsDetectFilesystem(Disk *Dev);
 
 // Mounting
-INT VfsMount(const CHAR *FsName, Disk *Dev, UINT64 StartLba, UINT64 SectorCount, VfsInode **Root);
+INT VfsMountEx(const char *FsName, Disk *Dev,
+               UINT64 StartLba, UINT64 SectorCount,
+               const CHAR *MountName, VfsInode **Root);
+/*
+ * Same as VfsMountEx but does not change the current directory
+ * after mounting. Useful for background mounts (USER.iso),
+ * temporary mounts inside commands, and the root-mount pass.
+ */
+INT VfsMountExNoCd(const char *FsName, Disk *Dev,
+                   UINT64 StartLba, UINT64 SectorCount,
+                   const CHAR *MountName, VfsInode **Root);
+/* Backwards-compatible wrapper: uses Dev->Name as the mount name. */
+INT VfsMount(const char *FsName, Disk *Dev,
+             UINT64 StartLba, UINT64 SectorCount, VfsInode **Root);
 INT VfsUnmount(VfsInode *Root);
 INT VfsUnmountDrive(const CHAR *DriveName);
 INT VfsListMountedDrives(CHAR *Buf, USIZE BufSize);
@@ -210,3 +226,5 @@ INT VfsBuildPath(VfsInode *Inode, CHAR *Buffer, INT MaxLen);
 // Utility
 INT BuildCurrentPath(VfsInode *Dir, const CHAR *Component, CHAR *Out);
 INT VfsGetPathDepth(VfsInode *Inode);
+
+INT VfsGetFirstDriveName(CHAR *Out, USIZE OutSize);

@@ -1,10 +1,11 @@
 #include <Limine/LimineParse.h>
 #include <Limine/limine.h>
+#include <Io/StdWarn.h>
 #include <Mem/Paging.h>
 #include <Lib/String.h>
 #include <Mem/LowMem.h>
+#include <Io/StdOut.h>
 #include <SpinLock.h>
-#include <Basecon.h>
 #include <Return.h>
 
 #define LOWMEM_PAGE_SIZE    4096
@@ -59,7 +60,7 @@ VOID LowMemInit(VOID) {
     if (GLowMem.Initialized) return;
 
     if (!LimineMemoryMapAvailable()) {
-        BaseconPrintf(BASECON_TYPE_WARNING, "lowmem: no memory map\n");
+        StdWarnPrintf("lowmem: no memory map\n");
         return;
     }
 
@@ -67,20 +68,19 @@ VOID LowMemInit(VOID) {
     UINT64 EntryCount = LimineGetMemoryMapEntryCount();
 
     if (!Entries || EntryCount == 0) {
-        BaseconPrintf(BASECON_TYPE_WARNING, "lowmem: empty memory map\n");
+        StdWarnPrintf("lowmem: empty memory map\n");
         return;
     }
 
     UINT64 Phys = LowMemFindRegion(Entries, EntryCount);
     if (!Phys) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "lowmem: no region below 16 MB for legacy DMA\n");
+        StdWarnPrintf("lowmem: no region below 16 MB for legacy DMA\n");
         return;
     }
 
     UINT64 Hhdm = LimineGetHHDMOffset();
     if (!Hhdm) {
-        BaseconPrintf(BASECON_TYPE_WARNING, "lowmem: no HHDM\n");
+        StdWarnPrintf("lowmem: no HHDM\n");
         return;
     }
 
@@ -94,8 +94,7 @@ VOID LowMemInit(VOID) {
 
     MemSet((VOID *)GLowMem.VirtBase, 0, LOWMEM_SIZE);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "lowmem: reserved %u KB at phys 0x%llX (below 16 MB)\n",
+    StdOutPrintf("lowmem: reserved %u KB at phys 0x%llX (below 16 MB)\n",
                   (UINT32)(LOWMEM_SIZE / 1024),
                   Phys);
 }

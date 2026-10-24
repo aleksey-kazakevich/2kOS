@@ -4,7 +4,11 @@
 #include <Time/Timer.h>
 #include <Lib/String.h>
 #include <Mem/Paging.h>
+#include <KObj/StdIo.h>
 #include <Scheduler.h>
+#include <Io/StdErr.h>
+#include <Io/StdOut.h>
+#include <KObj/KObj.h>
 #include <SpinLock.h>
 #include <Asm/Cpu.h>
 #include <Basecon.h>
@@ -104,6 +108,31 @@ STATIC VOID FreeKernelStack(VOID *Virt, USIZE Size) {
 
 STATIC VOID FreeTaskResources(Task *T) {
     if (!T || T == &InitTask) return;
+
+    /* Close all KObj handles — drop refcounts, call Close callbacks */
+    for (UINT32 I = 0; I < KOBJ_HANDLE_MAX; I++) {
+        if (T->KObjHandles[I].Valid && T->KObjHandles[I].Object) {
+            KObj *Obj = T->KObjHandles[I].Object;
+            T->KObjHandles[I].Valid  = FALSE;
+            T->KObjHandles[I].Object = NULLPTR;
+            T->KObjHandles[I].Access = 0;
+            if (Obj->Ops && Obj->Ops->Close) Obj->Ops->Close(Obj);
+            KObjUnref(Obj);
+        }
+    }
+
+    if (T->StdoutObj)  { KObjUnref(T->StdoutObj);  T->StdoutObj  = NULLPTR; }
+    if (T->StderrObj)  { KObjUnref(T->StderrObj);  T->StderrObj  = NULLPTR; }
+    if (T->StdwarnObj) { KObjUnref(T->StdwarnObj); T->StdwarnObj = NULLPTR; }
+    if (T->StdinObj)   { KObjUnref(T->StdinObj);   T->StdinObj   = NULLPTR; }
+
+    if (T->Cwd) {
+        VfsInodeUnref(T->Cwd);
+        T->Cwd = NULLPTR;
+    }
+
+    FdTableCloseAll(&T->Fds);
+
     if (T->KernelStack) FreeKernelStack(T->KernelStack, T->KernelStackSize);
     if (T->IsUser && T->PageTable) PagingDestroyUserAddressSpace(T->PageTable);
     MemoryFreeAligned(T);
@@ -265,8 +294,7 @@ STATIC VOID SchedAccountCurrentLocked(Task *Cur, UINT64 NowTick) {
 STATIC VOID IdleLoop(VOID) {
     UINT64 GsBase = ReadMSR(0xC0000101);
     if (GsBase < 0xffff800000000000ULL) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "idle: bad %%gs on AP, gsbase=0x%llX\n", GsBase);
+        StdErrPrintf("idle: bad %%gs on AP, gsbase=0x%llX\n", GsBase);
         PerCpu *Fallback = PerCpuGetByLapicId(ApicGetId());
         if (Fallback) {
             WriteMSR(0xC0000101, (UINT64)(UINTPTR)Fallback);
@@ -310,6 +338,18 @@ VOID SchedulerInit(VOID) {
     InitTask.Cpu = 0;
     InitTask.CpuAffinity = 0;
 
+    InitTask.StdoutObj  = StdIoGetDefaultConsole();
+    InitTask.StderrObj  = StdIoGetDefaultConsole();
+    InitTask.StdwarnObj = StdIoGetDefaultConsole();
+    InitTask.StdinObj   = NULLPTR;
+
+    FdTableInit(&InitTask.Fds);
+    FdSetupStdio(&InitTask.Fds, InitTask.StdinObj,
+             InitTask.StdoutObj, InitTask.StderrObj);
+
+    InitTask.Cwd = VfsCurrentDir;
+    if (InitTask.Cwd) VfsInodeRef(InitTask.Cwd);
+
     asm volatile ("fninit");
     asm volatile ("fxsave %0" : "=m"(InitTask.FpuState) :: "memory");
 
@@ -343,14 +383,14 @@ VOID SchedulerInitPerCpu(UINT32 CpuIndex) {
     /* Creating an idle task for this CPU */
     Task *Idle = (Task *)MemoryAllocateAligned(sizeof(Task), 16);
     if (!Idle) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "sched: cannot allocate idle task for cpu %u\n",
+        StdErrPrintf("sched: cannot allocate idle task for cpu %u\n",
                       CpuIndex);
         return;
     }
 
     MemSet(Idle, 0, sizeof(Task));
     MemCpy(Idle->FpuState, InitTask.FpuState, sizeof(Idle->FpuState));
+
     Idle->Pid = -1;
     Idle->State = TASK_READY;
     Idle->Nice = NICE_MAX;
@@ -442,6 +482,31 @@ STATIC VOID TaskInitCfsFields(Task *T) {
     T->CpuAffinity = 0;
 }
 
+STATIC VOID InheritStdChannels(Task *T) {
+    Task *Parent = GetCurrentTask();
+    if (Parent) {
+        if (Parent->StdoutObj)  { T->StdoutObj  = Parent->StdoutObj;  KObjRef(T->StdoutObj);  }
+        if (Parent->StderrObj)  { T->StderrObj  = Parent->StderrObj;  KObjRef(T->StderrObj);  }
+        if (Parent->StdwarnObj) { T->StdwarnObj = Parent->StdwarnObj; KObjRef(T->StdwarnObj); }
+        if (Parent->StdinObj)   { T->StdinObj   = Parent->StdinObj;   KObjRef(T->StdinObj);   }
+	if (Parent->Cwd) {
+            T->Cwd = Parent->Cwd;
+            VfsInodeRef(T->Cwd);
+        }
+    }
+    if (!T->StdoutObj)  T->StdoutObj  = StdIoGetDefaultConsole();
+    if (!T->StderrObj)  T->StderrObj  = StdIoGetDefaultConsole();
+    if (!T->StdwarnObj) T->StdwarnObj = StdIoGetDefaultConsole();
+    /* stdin: leave NULL if not inherited */
+
+    if (!T->Cwd && VfsCurrentDir) {
+        T->Cwd = VfsCurrentDir;
+        VfsInodeRef(T->Cwd);
+    }
+
+    FdSetupStdio(&T->Fds, T->StdinObj, T->StdoutObj, T->StderrObj);
+} 
+
 INT TaskCreate(VOID (*Entry)(VOID), USIZE StackSize, const CHAR *Name) {
     if (!Entry) return -1;
     if (StackSize == 0) StackSize = KSTACK_SIZE;
@@ -465,6 +530,8 @@ INT TaskCreate(VOID (*Entry)(VOID), USIZE StackSize, const CHAR *Name) {
     T->PageTable = PagingGetKernelRoot();
     T->IsUser = FALSE;
     StrnCpy(T->Name, Name ? Name : "unknown", sizeof(T->Name) - 1);
+
+    InheritStdChannels(T);
 
     TaskInitCfsFields(T);
 
@@ -509,6 +576,8 @@ INT UserTaskCreate(const VOID *Image,
     if (!T) return -1;
     MemSet(T, 0, sizeof(Task));
     MemCpy(T->FpuState, InitTask.FpuState, sizeof(T->FpuState));
+
+    InheritStdChannels(T);
 
     USIZE KSize = 0;
     VOID *KStack = AllocKernelStack(KernelStackSize, &KSize);
@@ -614,6 +683,8 @@ INT UserTaskCreateFromPageTable(UINT64 *Pml4,
     T->PageTable = Pml4;
     T->IsUser = TRUE;
     StrnCpy(T->Name, Name ? Name : "user", sizeof(T->Name) - 1);
+
+    InheritStdChannels(T);
 
     TaskInitCfsFields(T);
 
@@ -1046,7 +1117,11 @@ TaskFrame *PrepareInitialStack(UINT64 Entry,
     Frame->Rip = Entry;
     Frame->Cs = UserMode ? USER_CS : KERNEL_CS;
     Frame->Rflags = X86_EFLAGS_IF | X86_EFLAGS_FIXED;
-    Frame->Rsp = (ResumeRsp & ~0xFULL) - 8;
+    if (UserMode) {
+        Frame->Rsp = ResumeRsp;           /* argv/argc on stack, _start reads them */
+    } else {
+        Frame->Rsp = (ResumeRsp & ~0xFULL) - 8;   /* simulate 'call' — 8 mod 16 */
+    }
     Frame->Ss = UserMode ? USER_SS : KERNEL_SS;
 
     return Frame;
@@ -1419,8 +1494,7 @@ VOID SchedDumpRunQueues(VOID) {
         UINT64 MinV = P->MinVruntime;
         SpinLockReleaseIrq(&P->RunQueueLock, F);
 
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "cpu%u: online=%u idle=%u n=%u load=%llu minv=%llu\n",
+        StdOutPrintf("cpu%u: online=%u idle=%u n=%u load=%llu minv=%llu\n",
                       I, P->Online, P->Idle, N, L, MinV);
     }
 }

@@ -117,3 +117,13 @@ VOID ComFlush(ComDevice *Dev);
 VOID ComSetBaudRate(ComDevice *Dev, UINT32 BaudRate);
 
 UINT32 ComRegisterSysDevices(VOID);
+
+STATIC UINT8 ComPortToIndex(UINT16 Port) {
+    switch (Port) {
+        case COM1_PORT: return 1;
+        case COM2_PORT: return 2;
+        case COM3_PORT: return 3;
+        case COM4_PORT: return 4;
+        default:        return 0;
+    }
+}

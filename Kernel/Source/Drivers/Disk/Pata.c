@@ -8,9 +8,9 @@
 #include <Mem/Paging.h>
 #include <Time/Timer.h>
 #include <Lib/StdIo.h>
+#include <Io/StdOut.h>
 #include <SysDevice.h>
 #include <SpinLock.h>
-#include <Basecon.h>
 #include <KDriver.h>
 #include <Asm/Io.h>
 #include <Return.h>
@@ -599,8 +599,7 @@ INT PataAtapiInquiry(PataDrive *Drive) {
     for (INT I = 3; I >= 0 && Drive->AtapiRevision[I] == ' '; I--)
         Drive->AtapiRevision[I] = '\0';
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "atapi: %s %s %s\n",
+    StdOutPrintf("atapi: %s %s %s\n",
                   Drive->AtapiVendor,
                   Drive->AtapiProduct,
                   Drive->AtapiRevision);
@@ -639,8 +638,7 @@ INT PataAtapiReadCapacity(PataDrive *Drive) {
     Drive->SectorSize = (UINT16)BlockSize;
     Drive->TotalSectors = (UINT64)LastLba + 1;
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "atapi: capacity: %llu sectors x %u bytes (%llu MB)\n",
+    StdOutPrintf("atapi: capacity: %llu sectors x %u bytes (%llu MB)\n",
                   Drive->TotalSectors, BlockSize,
                   (Drive->TotalSectors * BlockSize) / (1024 * 1024));
 
@@ -1191,8 +1189,7 @@ INT PataIdentify(PataDrive *Drive, UINT16 IdentBuffer[256]) {
             if (MediaRc == SUCCESS) {
                 PataAtapiReadCapacity(Drive);
             } else {
-                BaseconPrintf(BASECON_TYPE_NORMAL,
-                              "atapi: no media in drive %u\n",
+                StdOutPrintf("atapi: no media in drive %u\n",
                               Drive->Drive);
             }
 

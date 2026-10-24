@@ -1,5 +1,8 @@
 #pragma once
 
+#include <Fs/FdTable.h>
+#include <KObj/KObj.h>
+#include <Fs/Vfs.h>
 #include <Types.h>
 #include <List.h>
 
@@ -105,6 +108,17 @@ typedef struct Task {
     /* === Load balancing === */
     INT32    Cpu;              /* current/last CPU; -1 = migrating */
     UINT32   CpuAffinity;      /* bitmask of valid CPUs; 0 = any */
+
+    KObjHandle KObjHandles[KOBJ_HANDLE_MAX];
+
+    struct KObj *StdoutObj;
+    struct KObj *StderrObj;
+    struct KObj *StdwarnObj;
+    struct KObj *StdinObj;
+
+    FdTable Fds;
+
+    struct VfsInode *Cwd;
 } ATTRIBUTE(aligned(16)) Task;
 
 typedef struct {

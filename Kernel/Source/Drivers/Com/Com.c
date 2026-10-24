@@ -2,8 +2,9 @@
 #include <Lib/String.h>
 #include <Lib/StdArg.h>
 #include <Lib/StdIo.h>
+#include <Io/StdOut.h>
 #include <SpinLock.h>
-#include <Basecon.h>
+#include <KObj/Com.h>
 #include <Asm/Io.h>
 #include <Return.h>
 
@@ -83,7 +84,7 @@ INT ComInit(UINT16 Port, UINT32 BaudRate) {
     if (Dev->Initialized) RETURN(SUCCESS);
     
     if (!ComPortExists(Port)) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "com: port 0x%X does not exist\n", Port);
+        StdOutPrintf("com: port 0x%X does not exist\n", Port);
         RETURN(NO_OBJECT);
     }
     
@@ -117,14 +118,26 @@ INT ComInit(UINT16 Port, UINT32 BaudRate) {
     
     SpinLockRelease(&Dev->Lock);
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "com: initialized port 0x%X at %u baud\n", 
+    StdOutPrintf("com: initialized port 0x%X at %u baud\n", 
                   Port, BaudRate);
     
     RETURN(SUCCESS);
 }
 
+STATIC VOID ComRegisterKObj(VOID) {
+    for (INT I = 0; I < 4; I++) {
+        ComDevice *Dev = &GComDevices[I];
+        if (!Dev->Initialized) continue;
+
+        UINT8 Index = ComPortToIndex(Dev->Port);   // 1..4
+        if (Index == 0) continue;
+
+        KObjComRegisterPort(Dev, Index - 1);       // COM0..COM3
+    }
+}
+
 INT ComInitAll(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "com: probing ports...\n");
+    StdOutPrintf("com: probing ports...\n");
     
     INT Found = 0;
     
@@ -139,8 +152,9 @@ INT ComInitAll(VOID) {
     }
     
     ComRegisterSysDevices();
+    ComRegisterKObj();
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "com: found %d ports\n", Found);
+    StdOutPrintf("com: found %d ports\n", Found);
     return Found;
 }
 
@@ -239,16 +253,6 @@ VOID ComSetBaudRate(ComDevice *Dev, UINT32 BaudRate) {
     ComSetupBaud(Dev, BaudRate);
     Dev->BaudRate = BaudRate;
     SpinLockRelease(&Dev->Lock);
-}
-
-STATIC UINT8 ComPortToIndex(UINT16 Port) {
-    switch (Port) {
-        case COM1_PORT: return 1;
-        case COM2_PORT: return 2;
-        case COM3_PORT: return 3;
-        case COM4_PORT: return 4;
-        default:        return 0;
-    }
 }
 
 STATIC UINT8 ComPortToIrq(UINT16 Port) {

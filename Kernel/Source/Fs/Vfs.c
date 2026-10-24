@@ -1,6 +1,9 @@
 #include <Mem/Allocator.h>
+#include <Io/StdWarn.h>
 #include <Lib/String.h>
 #include <Fs/Iso9660.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Lib/StdIo.h>
 #include <Fs/Exfat.h>
 #include <Fs/Fat32.h>
@@ -13,6 +16,7 @@ typedef struct DriveMount {
     CHAR DriveName[DRIVE_NAME_MAX];
     CHAR FsName[16];
     Disk *Dev;
+    UINT64 StartLba;
     VfsInode *Root;
     struct DriveMount *Next;
 } DriveMount;
@@ -177,6 +181,7 @@ STATIC INT VfsNormalizeRelPath(const CHAR *Path, CHAR *Out, USIZE OutSize) {
 const CHAR *VfsDetectFilesystemAt(Disk *Dev, UINT64 StartLba) {
     if (!Dev || !Dev->Read) return NULLPTR;
 
+    /* ISO9660: 2048-byte sectors */
     if (Dev->SectorSize == ISO_SECTOR_SIZE) {
         UINT8 Pvd[ISO_SECTOR_SIZE];
         if (Dev->Read(Dev, StartLba + ISO_PVD_LBA, 1, Pvd) == SUCCESS) {
@@ -186,20 +191,30 @@ const CHAR *VfsDetectFilesystemAt(Disk *Dev, UINT64 StartLba) {
         }
     }
 
-    if (Dev->SectorSize == 512) {
-        UINT8 Sector[512];
+    /* FAT/exFAT: 512-byte or 4096-byte sectors.
+     * Read one sector (max 4096 bytes) and inspect the VBR.
+     * We deliberately do NOT require 0xAA55 at the end of the sector:
+     * that is a boot signature, not a filesystem signature. Some
+     * disk images and real devices omit it. The FS name strings are
+     * sufficient for detection. */
+    if (Dev->SectorSize == 512 || Dev->SectorSize == 4096) {
+        UINT8 Sector[4096];
+        UINT32 SecSize = Dev->SectorSize;
+
         if (Dev->Read(Dev, StartLba, 1, Sector) != SUCCESS) return NULLPTR;
-        if (Sector[510] != 0x55 || Sector[511] != 0xAA) return NULLPTR;
 
         ExfatVbr *Exfat = (ExfatVbr *)Sector;
         if (MemCmp(Exfat->FsName, "EXFAT   ", 8) == 0) return "exfat";
 
         Fat32Bpb *Fat32 = (Fat32Bpb *)Sector;
-        if (Fat32->BytesPerSector == 512 &&
+        if ((Fat32->BytesPerSector == 512 ||
+             Fat32->BytesPerSector == 4096) &&
             Fat32->FatSize32 != 0 &&
             Fat32->FsInfo != 0 &&
             MemCmp(Fat32->FsType, "FAT32   ", 8) == 0)
             return "fat32";
+
+        (VOID)SecSize;
     }
 
     return NULLPTR;
@@ -508,52 +523,74 @@ STATIC FileSystem *VfsFindFsLocked(const CHAR *Name) {
     return NULLPTR;
 }
 
-INT VfsMount(const CHAR *FsName, Disk *Dev,
-              UINT64 StartLba, UINT64 SectorCount, VfsInode **Root) {
+STATIC INT VfsMountExInternal(const char *FsName, Disk *Dev,
+                              UINT64 StartLba, UINT64 SectorCount,
+                              const CHAR *MountName, VfsInode **Root,
+                              BOOL ChangeCwd) {
     if (!Dev) return -1;
 
-    // Check: already mounted?
-    if (VfsFindDriveMount(Dev->Name)) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "vfs: drive %s already mounted\n", Dev->Name);
-        return -1;
+    /* Build the effective mount name. */
+    CHAR EffectiveName[DRIVE_NAME_MAX];
+    if (MountName && MountName[0]) {
+        StrnCpy(EffectiveName, MountName, DRIVE_NAME_MAX - 1);
+        EffectiveName[DRIVE_NAME_MAX - 1] = '\0';
+    } else {
+        StrnCpy(EffectiveName, Dev->Name, DRIVE_NAME_MAX - 1);
+        EffectiveName[DRIVE_NAME_MAX - 1] = '\0';
     }
 
-    // FS detection (auto or explicit) — may do I/O, so without the lock
+    /* Reject duplicate mount names and duplicate (Dev, StartLba). */
+    {
+        UINTPTR F = SpinLockAcquireIrq(&GVfsLock);
+        BOOL Already = FALSE;
+        for (DriveMount *M = GDriveMounts; M; M = M->Next) {
+            if (M->Dev == Dev && M->StartLba == StartLba) {
+                StdWarnPrintf("vfs: %s at LBA %llu already mounted as '%s'\n",
+                              Dev->Name, StartLba, M->DriveName);
+                Already = TRUE;
+                break;
+            }
+            if (StrCaseCmp(M->DriveName, EffectiveName) == 0) {
+                StdWarnPrintf("vfs: mount name '%s' already in use\n",
+                              EffectiveName);
+                Already = TRUE;
+                break;
+            }
+        }
+        SpinLockReleaseIrq(&GVfsLock, F);
+        if (Already) return -1;
+    }
+
+    /* FS detection ... (без изменений) */
     const CHAR *RealFsName = NULLPTR;
     if (!FsName || FsName[0] == '\0' || StrCaseCmp(FsName, "auto") == 0) {
-        RealFsName = VfsDetectFilesystem(Dev);
+        RealFsName = VfsDetectFilesystemAt(Dev, StartLba);
         if (!RealFsName) {
-            BaseconPrintf(BASECON_TYPE_ERROR,
-                          "vfs: cannot detect FS on %s\n", Dev->Name);
+            StdErrPrintf("vfs: cannot detect FS on %s at LBA %llu\n",
+                         Dev->Name, StartLba);
             return -1;
         }
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "vfs: auto-detected FS: %s\n", RealFsName);
+        StdOutPrintf("vfs: auto-detected FS: %s\n", RealFsName);
     } else {
         RealFsName = FsName;
     }
 
-    // Find the FS under the lock
     UINTPTR Flags = SpinLockAcquireIrq(&GVfsLock);
     FileSystem *Fs = VfsFindFsLocked(RealFsName);
     SpinLockReleaseIrq(&GVfsLock, Flags);
 
     if (!Fs) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "vfs: FS %s not found\n", RealFsName);
+        StdErrPrintf("vfs: FS %s not found\n", RealFsName);
         return -1;
     }
 
-    // Mount — may be long (I/O), without the lock
     VfsInode *FsRoot = NULLPTR;
     if (Fs->Mount(Dev, StartLba, SectorCount, &FsRoot) != 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "vfs: mount failed for %s\n", Dev->Name);
+        StdErrPrintf("vfs: mount failed for %s at LBA %llu\n",
+                     Dev->Name, StartLba);
         return -1;
     }
 
-    // Allocate DriveMount
     DriveMount *M = (DriveMount *)MemoryAllocate(sizeof(DriveMount));
     if (!M) {
         if (Fs->Unmount) Fs->Unmount(FsRoot);
@@ -561,24 +598,27 @@ INT VfsMount(const CHAR *FsName, Disk *Dev,
         return -1;
     }
 
-    StrnCpy(M->DriveName, Dev->Name, DRIVE_NAME_MAX - 1);
+    StrnCpy(M->DriveName, EffectiveName, DRIVE_NAME_MAX - 1);
     M->DriveName[DRIVE_NAME_MAX - 1] = '\0';
     StrnCpy(M->FsName, Fs->Name, sizeof(M->FsName) - 1);
     M->FsName[sizeof(M->FsName) - 1] = '\0';
     M->Dev = Dev;
+    M->StartLba = StartLba;
     M->Root = FsRoot;
 
-    // Insert into the list under the lock
     Flags = SpinLockAcquireIrq(&GVfsLock);
-
-    // Check: did a duplicate appear while we were mounting?
-    if (VfsFindDriveMountLocked(Dev->Name)) {
+    BOOL Dup = FALSE;
+    for (DriveMount *It = GDriveMounts; It; It = It->Next) {
+        if (It->Dev == Dev && It->StartLba == StartLba) { Dup = TRUE; break; }
+        if (StrCaseCmp(It->DriveName, EffectiveName) == 0) { Dup = TRUE; break; }
+    }
+    if (Dup) {
         SpinLockReleaseIrq(&GVfsLock, Flags);
         if (Fs->Unmount) Fs->Unmount(FsRoot);
         VfsInodeUnref(FsRoot);
         MemoryFree(M);
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "vfs: %s mounted concurrently\n", Dev->Name);
+        StdWarnPrintf("vfs: %s at LBA %llu mounted concurrently\n",
+                      Dev->Name, StartLba);
         return -1;
     }
 
@@ -592,31 +632,52 @@ INT VfsMount(const CHAR *FsName, Disk *Dev,
 
     SpinLockReleaseIrq(&GVfsLock, Flags);
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS,
-                  "vfs: mounted %s on %s\n", Dev->Name, Fs->Name);
+    StdOutPrintf("vfs: mounted %s on %s\n", EffectiveName, Fs->Name);
 
-    VfsCd(&VfsCurrentDir, Dev->Name);
+    if (ChangeCwd) {
+        VfsCd(&VfsCurrentDir, EffectiveName);
+    }
     return 0;
+}
+
+INT VfsMountEx(const char *FsName, Disk *Dev,
+               UINT64 StartLba, UINT64 SectorCount,
+               const CHAR *MountName, VfsInode **Root) {
+    return VfsMountExInternal(FsName, Dev, StartLba, SectorCount,
+                              MountName, Root, TRUE);
+}
+
+INT VfsMountExNoCd(const char *FsName, Disk *Dev,
+                   UINT64 StartLba, UINT64 SectorCount,
+                   const CHAR *MountName, VfsInode **Root) {
+    return VfsMountExInternal(FsName, Dev, StartLba, SectorCount,
+                              MountName, Root, FALSE);
+}
+
+INT VfsMount(const char *FsName, Disk *Dev,
+             UINT64 StartLba, UINT64 SectorCount, VfsInode **Root) {
+    return VfsMountEx(FsName, Dev, StartLba, SectorCount, NULLPTR, Root);
 }
 
 INT VfsUnmount(VfsInode *Root) {
     if (!Root) return -1;
 
-    UINTPTR Flags = SpinLockAcquireIrq(&GVfsLock);
-    const CHAR *Name = NULLPTR;
     CHAR NameBuf[DRIVE_NAME_MAX];
+    BOOL Found = FALSE;
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GVfsLock);
     for (DriveMount *M = GDriveMounts; M; M = M->Next) {
         if (M->Root == Root) {
             StrnCpy(NameBuf, M->DriveName, DRIVE_NAME_MAX - 1);
             NameBuf[DRIVE_NAME_MAX - 1] = '\0';
-            Name = NameBuf;
+            Found = TRUE;
             break;
         }
     }
     SpinLockReleaseIrq(&GVfsLock, Flags);
 
-    if (!Name) return -1;
-    return VfsUnmountDrive(Name);
+    if (!Found) return -1;
+    return VfsUnmountDrive(NameBuf);
 }
 
 INT VfsUnmountDrive(const CHAR *DriveName) {
@@ -630,6 +691,10 @@ INT VfsUnmountDrive(const CHAR *DriveName) {
         SpinLockReleaseIrq(&GVfsLock, Flags);
         return -1;
     }
+
+    VfsInode *Root = M->Root;
+    Disk     *Dev  = M->Dev;
+    BOOL      IsVirtual = (Dev && Dev->IsVirtual);
 
     // If VfsCurrentDir is inside this mount — move it to the namespace root
     if (VfsCurrentDir && !VfsIsNamespaceRoot(VfsCurrentDir)) {
@@ -654,9 +719,6 @@ INT VfsUnmountDrive(const CHAR *DriveName) {
         Prev = &(*Prev)->Next;
     }
 
-    VfsInode *Root = M->Root;
-    Disk *Dev = M->Dev;
-
     SpinLockReleaseIrq(&GVfsLock, Flags);
 
     // Phase 2: outside the lock — Sync and Unmount (may do I/O)
@@ -668,6 +730,10 @@ INT VfsUnmountDrive(const CHAR *DriveName) {
     VfsInodeUnref(Root);
 
     MemoryFree(M);
+
+    if (IsVirtual) {
+        DiskMgrUnregisterDisk(Dev);   /* calls Dev->Destroy */
+    }
 
     (VOID)Dev;
 
@@ -707,7 +773,7 @@ INT VfsOpen(VfsInode *Dir, const CHAR *Path, UINT32 Flags, VfsFile **File) {
     if (!Path || !File) return -1;
 
     if (VfsWalk(Dir, Path, &Inode) != 0) {
-        if (!(Flags & O_CREAT)) return -1;
+        if (!(Flags & VFS_O_CREAT)) return -1;
         if (VfsResolvePath(Dir, Path, &Parent, Name, FALSE) != 0) return -1;
         if (Name[0] == '\0' || !Parent->IOp || !Parent->IOp->Create) {
             VfsInodeUnref(Parent);
@@ -720,7 +786,7 @@ INT VfsOpen(VfsInode *Dir, const CHAR *Path, UINT32 Flags, VfsFile **File) {
         VfsInodeUnref(Parent);
     }
 
-    if ((Flags & O_TRUNC) && Inode->IMode == FT_REG_FILE &&
+    if ((Flags & VFS_O_TRUNC) && Inode->IMode == FT_REG_FILE &&
         Inode->IFop && Inode->IFop->Truncate) {
         Inode->IFop->Truncate(Inode, 0);
         Inode->ISize = 0;
@@ -733,7 +799,7 @@ INT VfsOpen(VfsInode *Dir, const CHAR *Path, UINT32 Flags, VfsFile **File) {
     }
 
     F->FInode = Inode;
-    F->FPos = (Flags & O_APPEND) ? Inode->ISize : 0;
+    F->FPos = (Flags & VFS_O_APPEND) ? Inode->ISize : 0;
     F->FFlags = Flags;
     F->FPrivate = NULLPTR;
     *File = F;
@@ -753,7 +819,7 @@ INT VfsClose(VfsFile *File) {
 INT VfsRead(VfsFile *File, VOID *Buf, UINT32 Size, UINT32 *Read) {
     if (!File || !File->FInode || !File->FInode->IFop || !File->FInode->IFop->Read)
         return -1;
-    if ((File->FFlags & (O_READ | O_WRITE)) == O_WRITE) return -1;
+    if ((File->FFlags & (VFS_O_READ | VFS_O_WRITE)) == VFS_O_WRITE) return -1;
 
     INT Ret = File->FInode->IFop->Read(File->FInode, File->FPos, Buf, Size, Read);
     if (Ret == 0 && Read)
@@ -764,7 +830,7 @@ INT VfsRead(VfsFile *File, VOID *Buf, UINT32 Size, UINT32 *Read) {
 INT VfsWrite(VfsFile *File, const VOID *Buf, UINT32 Size, UINT32 *Written) {
     if (!File || !File->FInode || !File->FInode->IFop || !File->FInode->IFop->Write)
         return -1;
-    if (File->FFlags && !(File->FFlags & O_WRITE)) return -1;
+    if (File->FFlags && !(File->FFlags & VFS_O_WRITE)) return -1;
 
     INT Ret = File->FInode->IFop->Write(File->FInode, File->FPos, Buf, Size, Written);
     if (Ret == 0) {
@@ -797,6 +863,14 @@ INT VfsMkdir(VfsInode *Dir, const CHAR *Path, UINT32 Mode, VfsInode **Result) {
         !Parent->IOp || !Parent->IOp->Mkdir) {
         VfsInodeUnref(Parent);
         return -1;
+    }
+	
+	VfsInode *Existing = NULLPTR;
+    if (Parent->IOp->Lookup &&
+        Parent->IOp->Lookup(Parent, Name, &Existing) == SUCCESS) {
+        VfsInodeUnref(Existing);
+        VfsInodeUnref(Parent);
+        RETURN(ALREADY_EXISTS);
     }
 
     INT Ret = Parent->IOp->Mkdir(Parent, Name, Mode ? Mode : FT_DIR, Result);
@@ -838,6 +912,14 @@ INT VfsCreate(VfsInode *Dir, const CHAR *Path, UINT32 Mode, VfsInode **Result) {
         VfsInodeUnref(Parent);
         return -1;
     }
+	
+	VfsInode *Existing = NULLPTR;
+    if (Parent->IOp->Lookup &&
+        Parent->IOp->Lookup(Parent, Name, &Existing) == SUCCESS) {
+        VfsInodeUnref(Existing);
+        VfsInodeUnref(Parent);
+        RETURN(ALREADY_EXISTS);
+    }
 
     INT Ret = Parent->IOp->Create(Parent, Name, Mode, Result);
     VfsInodeUnref(Parent);
@@ -854,6 +936,14 @@ INT VfsUnlink(VfsInode *Dir, const CHAR *Path) {
         VfsInodeUnref(Parent);
         return -1;
     }
+
+    VfsInode *Existing = NULLPTR;
+    if (!Parent->IOp->Lookup ||
+        Parent->IOp->Lookup(Parent, Name, &Existing) != SUCCESS) {
+        VfsInodeUnref(Parent);
+        RETURN(NOT_FOUND);
+    }
+    VfsInodeUnref(Existing);
 
     INT Ret = Parent->IOp->Unlink(Parent, Name);
     VfsInodeUnref(Parent);
@@ -1086,6 +1176,9 @@ VOID VfsUpdateCurrentPath(VOID) {
         StrCpy(VfsCurrentPath, "/");
         VfsCurrentDrive[0] = '\0';
         SpinLockReleaseIrq(&GVfsLock, Flags);
+	SnPrintf(Prompt, sizeof(Prompt), "2KOS> ");
+    	BaseconSetPrompt(Prompt);
+    	BaseconRedrawFull();
         if (CurDir) VfsInodeUnref(CurDir);
         return;
     }
@@ -1096,7 +1189,7 @@ VOID VfsUpdateCurrentPath(VOID) {
         VfsCurrentDrive[0] = '\0';
         SpinLockReleaseIrq(&GVfsLock, Flags);
 
-        SnPrintf(Prompt, sizeof(Prompt), "/> ");
+        SnPrintf(Prompt, sizeof(Prompt), "2KOS> ");
         BaseconSetPrompt(Prompt);
         BaseconRedrawFull();
         VfsInodeUnref(CurDir);
@@ -1109,6 +1202,9 @@ VOID VfsUpdateCurrentPath(VOID) {
         StrCpy(VfsCurrentPath, "/");
         VfsCurrentDrive[0] = '\0';
         SpinLockReleaseIrq(&GVfsLock, Flags);
+	SnPrintf(Prompt, sizeof(Prompt), "2KOS> ");
+    	BaseconSetPrompt(Prompt);
+    	BaseconRedrawFull();
         VfsInodeUnref(CurDir);
         return;
     }
@@ -1144,7 +1240,6 @@ VOID VfsUpdateCurrentPath(VOID) {
     SnPrintf(Prompt, sizeof(Prompt), "%s> ", DisplayPath);
     BaseconSetPrompt(Prompt);
     BaseconRedrawFull();
-
     VfsInodeUnref(CurDir);
 }
 
@@ -1195,8 +1290,7 @@ VOID VfsInit(VOID) {
 
     VfsRootInode = VfsAllocInode();
     if (!VfsRootInode) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "vfs: failed to allocate root inode\n");
+        StdErrPrintf("vfs: failed to allocate root inode\n");
         return;
     }
 
@@ -1211,5 +1305,19 @@ VOID VfsInit(VOID) {
     StrCpy(VfsCurrentPath, "/");
     VfsCurrentDrive[0] = '\0';
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "vfs: initialized\n");
+    StdOutPrintf("vfs: initialized\n");
+}
+
+INT VfsGetFirstDriveName(CHAR *Out, USIZE OutSize) {
+    if (!Out || OutSize == 0) return -1;
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GVfsLock);
+    INT Rc = NOT_FOUND;
+    if (GDriveMounts) {
+        StrnCpy(Out, GDriveMounts->DriveName, OutSize - 1);
+        Out[OutSize - 1] = '\0';
+        Rc = SUCCESS;
+    }
+    SpinLockReleaseIrq(&GVfsLock, Flags);
+    return Rc;
 }

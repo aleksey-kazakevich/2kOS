@@ -140,6 +140,9 @@ typedef struct Disk {
     INT (*Read)(struct Disk *Disk, UINT64 Lba, UINT32 Count, VOID *Buffer);
     INT (*Write)(struct Disk *Disk, UINT64 Lba, UINT32 Count, const VOID *Buffer);
     INT (*Flush)(struct Disk *Disk);
+    VOID (*Destroy)(struct Disk *Disk);
+
+    BOOL IsVirtual;
 } Disk;
 
 /* ============================================================================ Initialization ============================================================================ */
@@ -213,6 +216,10 @@ INT PartitionDeleteGPT(Disk *Disk, UINT32 PartitionIndex);
 
 /* Initialize an empty GPT on the disk (creates a protective MBR, GPT Header on LBA 1, entries on LBA 2, backup at the end). */
 INT GptInitDisk(Disk *Disk);
+/* Initialize an empty MBR: zero boot code, zero partition table,
+ * 0xAA55 signature. Boot code (446 bytes) is written separately
+ * by InstallWriteMbrBootCode. */
+INT MbrInitDisk(Disk *Disk);
 
 /* ============================================================================ Utility ============================================================================ */
 
@@ -253,3 +260,5 @@ VOID DiskCfgMountRoots(VOID);
 
 /* Utilities */
 BOOL DiskCfgAliasExists(const CHAR *Alias, Disk *SelfD, Partition *SelfP);
+
+INT DiskRename(Disk *D, const CHAR *NewName);

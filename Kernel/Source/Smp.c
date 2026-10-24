@@ -7,7 +7,10 @@
 #include <Mem/Paging.h>
 #include <Time/Timer.h>
 #include <Lib/String.h>
+#include <Io/StdWarn.h>
 #include <Scheduler.h>
+#include <Io/StdErr.h>
+#include <Io/StdOut.h>
 #include <Basecon.h>
 #include <Asm/Cpu.h>
 #include <PerCpu.h>
@@ -136,8 +139,7 @@ VOID ApEntry(struct limine_mp_info *Info) {
     Self->Online = TRUE;
     __sync_fetch_and_add(&GApStarted, 1);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "smp: cpu %u (apic %u) online\n",
+    StdOutPrintf("smp: cpu %u (apic %u) online\n",
                   Self->CpuIndex, Self->LapicId);
 
     LocalInterruptsEnable();
@@ -152,8 +154,7 @@ VOID ApEntry(struct limine_mp_info *Info) {
 INT SmpInit(VOID) {
     /* Fallback: No Limine MP */
     if (!LimineMpAvailable()) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "smp: limine mp not available, uniprocessor mode\n");
+        StdWarnPrintf("smp: limine mp not available, uniprocessor mode\n");
 
         MemSet(&GPerCpu[0], 0, sizeof(PerCpu));
         GPerCpu[0].CpuIndex = 0;
@@ -182,13 +183,12 @@ INT SmpInit(VOID) {
     UINT32 BspLapicId = LimineMpBspLapicId();
 
     if (Count == 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "smp: no cpus reported\n");
+        StdErrPrintf("smp: no cpus reported\n");
         RETURN(NO_OBJECT);
     }
     if (Count > MAX_CPUS) Count = MAX_CPUS;
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "smp: %llu cpu(s), bsp apic id %u\n",
+    StdOutPrintf("smp: %llu cpu(s), bsp apic id %u\n",
                   Count, BspLapicId);
 
     MemSet(GPerCpu, 0, sizeof(GPerCpu));
@@ -247,8 +247,7 @@ INT SmpInit(VOID) {
 
         while (GApStarted < GCpuCount - 1) {
             if ((TimerTicks() - Start) > TimeoutTicks) {
-                BaseconPrintf(BASECON_TYPE_WARNING,
-                              "smp: timeout (%u/%u AP started)\n",
+                StdWarnPrintf("smp: timeout (%u/%u AP started)\n",
                               GApStarted, GCpuCount - 1);
                 break;
             }
@@ -260,8 +259,7 @@ INT SmpInit(VOID) {
     GCpuHaltedCount = 0;
     GCpuStopRequested = 0;
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS,
-                  "smp: %u/%u cpu(s) online\n",
+    StdOutPrintf("smp: %u/%u cpu(s) online\n",
                   GApStarted + 1, GCpuCount);
 
     GSmpReady = TRUE;
@@ -271,3 +269,37 @@ INT SmpInit(VOID) {
 BOOL SmpIsReady(VOID) { return GSmpReady; }
 
 UINT32 SmpGetOnlineCount(VOID) { return GApStarted + 1; }
+
+INT SmpGetCpuInfo(UINT32 Index, SmpCpuInfo *Out) {
+    if (!Out) RETURN(INCORRECT_VALUE);
+
+    PerCpu *P = PerCpuGetByIndex(Index);
+    if (!P) RETURN(NOT_FOUND);
+
+    MemSet(Out, 0, sizeof(*Out));
+    Out->CpuIndex      = P->CpuIndex;
+    Out->LapicId       = P->LapicId;
+    Out->AcpiUid       = P->AcpiUid;
+    Out->Online        = P->Online ? 1 : 0;
+    Out->IsBsp         = P->IsBsp  ? 1 : 0;
+    Out->Idle          = P->Idle   ? 1 : 0;
+    Out->Ticks         = P->Ticks;
+    Out->IpiCount      = P->IpiCount;
+    Out->Load          = __atomic_load_n(&P->Load, __ATOMIC_RELAXED);
+    Out->MinVruntime   = P->MinVruntime;
+    Out->RunQueueCount = P->RunQueueCount;
+
+    if (P->CurrentTask) {
+        Out->CurrentPid = (UINT32)P->CurrentTask->Pid;
+        StrnCpy(Out->CurrentName, P->CurrentTask->Name,
+                sizeof(Out->CurrentName) - 1);
+    } else {
+        Out->CurrentPid = 0xFFFFFFFFu;   /* none */
+    }
+
+    RETURN(SUCCESS);
+}
+
+UINT32 SmpGetCpuCount(VOID) {
+    return PerCpuGetCount();
+}

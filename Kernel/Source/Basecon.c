@@ -1,12 +1,15 @@
 #include <Drivers/Ps2/Ps2Keyboard.h>
 #include <Mem/Allocator.h>
+#include <Io/StdWarn.h>
+#include <Time/Timer.h>
 #include <Lib/String.h>
 #include <Lib/StdArg.h>
 #include <FontAccess.h>
 #include <Lib/StdIo.h>
 #include <Scheduler.h>
-#include <Basecon.h>
+#include <Io/StdIo.h>
 #include <SpinLock.h>
+#include <Basecon.h>
 #include <Return.h>
 #include <Rgb.h>
 
@@ -17,7 +20,9 @@ STATIC BaseconInputCallback GInputCallback = NULLPTR;
 STATIC VOID *GInputCallbackUserData = NULLPTR;
 STATIC BOOL GBaseconSubscribed = FALSE;
 STATIC volatile BOOL GRunning = TRUE;
-STATIC Task *GConsoleTask = NULLPTR;
+STATIC Task *GConsoleTask = NULLPTR;       /* input thread  */
+STATIC Task *GConsoleOutTask = NULLPTR;    /* output thread */
+STATIC KObj *GConsoleOutObj = NULLPTR;     /* \Kernel\Consoles\Basecon */
 
 STATIC struct {
     BaseconKeyEvent Events[BASECON_KEY_QUEUE_SIZE];
@@ -192,7 +197,7 @@ STATIC VOID BaseconPutCharLocked(CHAR C) {
         return;
     }
 
-    // Old mode
+    /* Old mode (PromptFixed == FALSE) — not used by kconsoleout, kept for compat */
     if (C == '\n') {
         GBasecon.CursorX = 0;
         GBasecon.CursorY++;
@@ -289,8 +294,6 @@ VOID BaseconRedrawFull(VOID) {
 }
 
 VOID BaseconCheckProgramStatus(VOID) {
-    // We read without lock — flags are written under lock, but reading is reasonable
-    // not critical for accuracy
     if (!GBasecon.WaitingForProgram) return;
     if (!TaskIsAlive(GBasecon.WaitingPid)) {
         GBasecon.WaitingForProgram = FALSE;
@@ -315,7 +318,6 @@ VOID BaseconSetPromptFixed(BOOL Enable) {
         GBasecon.WaitingForProgram = FALSE;
         GBasecon.WaitingPid = -1;
 
-        // inline clear + redraw (without taking the lock again)
         GBasecon.Scrollback.Count = 0;
         GBasecon.Scrollback.StartLine = 0;
         BaseconRedrawFullLocked();
@@ -323,53 +325,41 @@ VOID BaseconSetPromptFixed(BOOL Enable) {
     SpinLockReleaseIrq(&GBasecon.Lock, Flags);
 }
 
+/*
+ * BaseconPutString / BaseconPrintf — kernel-side logs.
+ *
+ * They no longer render on screen. They feed the default console
+ * (\Kernel\Consoles\Basecon). kconsoleout reads that ring and renders.
+ *
+ * This is the compatibility layer for the 200+ existing call sites;
+ * prefer StdErrPrintf / StdWarnPrintf / KLogPrintf in new code.
+ */
 VOID BaseconPutString(const CHAR *Str) {
-    if (!GBasecon.Initialized || !Str) return;
-    if (!BaseconEnabled) return;
-
-    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
-    BaseconPutStringLocked(Str);
-    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+    if (!Str) return;
+    KLogPrint(Str);
 }
 
 INT BaseconPrintf(BaseconMsgType Type, const CHAR *Fmt, ...) {
-    if (!GBasecon.Initialized || !Fmt) RETURN(INCORRECT_VALUE);
-    if (!BaseconEnabled) RETURN(OPERATION_DISABLED);
+    if (!Fmt) RETURN(INCORRECT_VALUE);
 
     CHAR Buffer[1024];
     VA_LIST Args;
     VaStart(Args, Fmt);
     INT Result = VsnPrintf(Buffer, sizeof(Buffer), Fmt, Args);
     VaEnd(Args);
-
     if (Result <= 0) RETURN(Result);
 
-    UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
-
-    FramebufferColor OldFg = GBasecon.Fg;
-    FramebufferColor OldBg = GBasecon.Bg;
-
     const CHAR *Prefix = NULLPTR;
-    FramebufferColor PrefixColor = OldFg;
-    BOOL HasPrefix = FALSE;
-
     switch (Type) {
-        case BASECON_TYPE_ERROR:   Prefix = "E: "; PrefixColor = RGB_RED;    HasPrefix = TRUE; break;
-        case BASECON_TYPE_INFO:    Prefix = "I: "; PrefixColor = RGB_BLUE;   HasPrefix = TRUE; break;
-        case BASECON_TYPE_SUCCESS: Prefix = "S: "; PrefixColor = RGB_GREEN;  HasPrefix = TRUE; break;
-        case BASECON_TYPE_WARNING: Prefix = "W: "; PrefixColor = RGB_YELLOW; HasPrefix = TRUE; break;
+        case BASECON_TYPE_ERROR:   Prefix = "E: "; break;
+        case BASECON_TYPE_INFO:    Prefix = "I: "; break;
+        case BASECON_TYPE_SUCCESS: Prefix = "S: "; break;
+        case BASECON_TYPE_WARNING: Prefix = "W: "; break;
         default: break;
     }
 
-    if (HasPrefix) {
-        GBasecon.Fg = PrefixColor;
-        BaseconPutStringLocked(Prefix);
-        GBasecon.Fg = OldFg;
-    }
-
-    BaseconPutStringLocked(Buffer);
-
-    SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+    if (Prefix) KLogPrint(Prefix);
+    KLogPrint(Buffer);
 
     RETURN(Result);
 }
@@ -486,7 +476,7 @@ STATIC VOID KeyboardHandler(KeyEvent *Event, VOID *UserData) {
 }
 
 // ============================================================================
-// KEY PROCESSING — takes GBasecon.Lock once
+// KEY PROCESSING
 // ============================================================================
 
 VOID BaseconProcessKey(UINT8 ScanCode, CHAR Ascii, BOOL Pressed) {
@@ -535,7 +525,6 @@ VOID BaseconProcessKey(UINT8 ScanCode, CHAR Ascii, BOOL Pressed) {
                 GBasecon.History.Current = GBasecon.History.Count;
             }
 
-            // Calling a callback OUTSIDE the lock so that there is no deadline
             BaseconInputCallback Cb = GInputCallback;
             VOID *CbData = GInputCallbackUserData;
             CHAR CbBuffer[BASECON_INPUT_BUFFER_SIZE];
@@ -715,6 +704,10 @@ INT BaseconInit(Framebuffer *FB) {
     RETURN(SUCCESS);
 }
 
+// ============================================================================
+// KCONSOLE — INPUT (unchanged)
+// ============================================================================
+
 STATIC VOID ConsoleThread(VOID) {
     GConsoleTask = GetCurrentTask();
 
@@ -747,13 +740,63 @@ STATIC VOID ConsoleThread(VOID) {
         }
     }
 
-    /* kconsole is being completed normally. */
     GConsoleTask = NULLPTR;
     TaskExit(0);
 }
 
+// ============================================================================
+// KCONSOLEOUT — OUTPUT: reads \Kernel\Consoles\Basecon and paints
+// ============================================================================
+
+STATIC VOID ConsoleOutThread(VOID) {
+    GConsoleOutTask = GetCurrentTask();
+
+    GConsoleOutObj = KObjFindByPath("\\Kernel\\Consoles\\Basecon");
+    if (!GConsoleOutObj) {
+	FramebufferFillRect(0, 0, FramebufferGet()->Width,
+                            FONT_LINE_HEIGHT * 2, RGB_RED);
+        FramebufferDrawString(
+            "kconsoleout: \\Kernel\\Consoles\\Basecon not found!",
+            0, 0, RGB_WHITE, RGB_RED);
+        FramebufferSwapBuffers();
+        GConsoleOutTask = NULLPTR;
+        TaskExit(0);
+    }
+
+    while (GRunning) {
+        UINT32 Got = 0;
+        CHAR Buf[256];
+
+        INT Rc = StdIoReadFrom(GConsoleOutObj, Buf, sizeof(Buf), &Got);
+        if (Rc != SUCCESS || Got == 0) {
+            /* No data — sleep 20 ms and retry. A proper event KObj
+             * would be nicer, but polling is fine for now. */
+            TimerSleep(20);
+            continue;
+        }
+
+        UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+        for (UINT32 I = 0; I < Got; I++) {
+            BaseconPutCharLocked(Buf[I]);
+        }
+	BaseconRedrawFullLocked();
+	FramebufferSwapBuffers();
+        SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+    }
+
+    if (GConsoleOutObj) {
+        KObjUnref(GConsoleOutObj);
+        GConsoleOutObj = NULLPTR;
+    }
+    GConsoleOutTask = NULLPTR;
+    TaskExit(0);
+}
+
+// ============================================================================
+// START / SHUTDOWN
+// ============================================================================
+
 VOID BaseconStartConsoleThread(VOID) {
-    if (GConsoleTask) return;
     if (!GRunning) return;
 
     SpinLockInit(&GKeyQueue.Lock);
@@ -761,25 +804,35 @@ VOID BaseconStartConsoleThread(VOID) {
     GKeyQueue.Tail = 0;
     GKeyQueue.Blocked = FALSE;
 
-    INT Pid = TaskCreate(ConsoleThread, 1024 * 1024, "kconsole");
-    if (Pid < 0) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "basecon: failed to start kconsole thread\n");
+    /* Input thread: keyboard → BaseconProcessKey */
+    if (!GConsoleTask) {
+        INT Pid = TaskCreate(ConsoleThread, 1024 * 1024, "kconsole");
+        if (Pid < 0) {
+            StdWarnPrintf("basecon: failed to start kconsole thread\n");
+        }
+    }
+
+    /* Output thread: \Kernel\Consoles\Basecon → BaseconPutCharLocked */
+    if (!GConsoleOutTask) {
+        INT Pid = TaskCreate(ConsoleOutThread, 1024 * 1024, "kconsoleout");
+        if (Pid < 0) {
+            StdWarnPrintf("basecon: failed to start kconsoleout thread\n");
+        }
     }
 }
 
 VOID BaseconShutdown(BOOL ClearScreen) {
-    /* Idempotence: if it is already turned off, we exit. */
     if (!GRunning && !BaseconEnabled) return;
 
-    /* 1. Stop kconsole. */
     GRunning = FALSE;
 
     if (GConsoleTask) {
-        TaskWakeup(GConsoleTask);   /* wake up if in TaskBlock */
+        TaskWakeup(GConsoleTask);
+    }
+    if (GConsoleOutTask) {
+        TaskWakeup(GConsoleOutTask);
     }
 
-    /* 2. Clear the screen (before disabling BaseconEnabled). */
     if (ClearScreen && GBasecon.Initialized) {
         UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
         FramebufferClear(GBasecon.Bg);
@@ -787,17 +840,14 @@ VOID BaseconShutdown(BOOL ClearScreen) {
         SpinLockReleaseIrq(&GBasecon.Lock, Flags);
     }
 
-    /* 3. Unsubscribe from the keyboard. */
     if (GBaseconSubscribed) {
         Ps2KeyboardUnsubscribe(KeyboardHandler);
         GBaseconSubscribed = FALSE;
     }
 
-    /* 4. Reset the callback. */
     GInputCallback = NULLPTR;
     GInputCallbackUserData = NULLPTR;
 
-    /* 5. Clear the queue of keys. */
     {
         UINTPTR Flags = SpinLockAcquireIrq(&GKeyQueue.Lock);
         GKeyQueue.Head = 0;
@@ -806,10 +856,8 @@ VOID BaseconShutdown(BOOL ClearScreen) {
         SpinLockReleaseIrq(&GKeyQueue.Lock, Flags);
     }
 
-    /* 6. Disable BaseconEnabled — all Basecon* functions will return immediately. */
     BaseconEnabled = FALSE;
 
-    /* 7. Reset the GBasecon flags. */
     if (GBasecon.Initialized) {
         UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
         GBasecon.InputMode = FALSE;

@@ -4,19 +4,22 @@
 #include <Time/Timer.h>
 #include <Lib/StdIo.h>
 #include <Scheduler.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Basecon.h>
 #include <Cmd/Run.h>
 #include <Return.h>
 #include <Cmd.h>
 #include <Elf.h>
 #include <Rgb.h>
+#include <Env.h>
 
 // ============================================================================
 // HELP
 // ============================================================================
 
 STATIC VOID CmdRunHelp(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
 }
 
 // ============================================================================
@@ -70,48 +73,53 @@ INT CmdRunHandler(INT ArgC, const CHAR *ArgV[]) {
         return -1;
     }
 
+    CHAR ResolvedPath[PATH_MAX];
     const CHAR *Path = ArgV[1];
 
-    // We check that the file exists and it is ELF.
+    /*
+     * If the name has no path separator and no mount prefix,
+     * resolve it through PATH (from /etc/env.conf).
+     * Explicit paths ("SATA1::/bin/x", "/bin/x", "./x") are used as-is.
+     */
+    BOOL LooksLikePath = (StrChr(Path, '/') != NULLPTR) ||
+                         (StrStr(Path, "::") != NULLPTR);
+    if (!LooksLikePath) {
+        if (EnvResolveExec(Path, ResolvedPath, sizeof(ResolvedPath)) == SUCCESS) {
+            Path = ResolvedPath;
+        }
+    }
 
     VfsFile *File = NULLPTR;
-    INT Rc = VfsOpen(VfsCurrentDir, Path, O_READ, &File);
+    INT Rc = VfsOpen(VfsCurrentDir, Path, VFS_O_READ, &File);
     if (Rc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "cannot open '%s'\n", Path);
+        StdErrPrintf("cannot open '%s'\n", Path);
         return -1;
     }
 
-    // We read the first bytes to check ELF
     Elf64Ehdr Ehdr;
     UINT32 Rd = 0;
     VfsSeek(File, 0, SEEK_SET);
     Rc = VfsRead(File, &Ehdr, sizeof(Ehdr), &Rd);
     if (Rc != SUCCESS || Rd != sizeof(Ehdr)) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "cannot read ELF header\n");
+        StdErrPrintf("cannot read ELF header\n");
         VfsClose(File);
         return -1;
     }
 
-    //Quick check
     if (*(const UINT32 *)Ehdr.EIdent != ELF_MAGIC ||
         Ehdr.EIdent[4] != ELFCLASS64 ||
         Ehdr.EIdent[5] != ELFDATA2LSB ||
         Ehdr.EMachine != EM_X86_64) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "'%s' is not a valid ELF64\n", Path);
+        StdErrPrintf("'%s' is not a valid ELF64\n", Path);
         VfsClose(File);
         return -1;
     }
-
-    // Loading ELF
 
     UINT64 *Pml4 = NULLPTR;
     UINT64 Entry = 0;
     UINT64 Sp = 0;
     UINT64 HeapStart = 0;
 
-    // ArgC for the program: name + other arguments
-    // (ArgV[0] = "run", ArgV[1] = path, ArgV[2..] = args)
-    // Passing the program: ArgV[1..ArgC-1] as argv[0..]
     INT ProgArgC = ArgC - 1;
     const CHAR **ProgArgV = &ArgV[1];
 
@@ -119,25 +127,19 @@ INT CmdRunHandler(INT ArgC, const CHAR *ArgV[]) {
     VfsClose(File);
 
     if (Rc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR,
-                      "run: ELF load failed (%d): %s\n",
+        StdErrPrintf("run: ELF load failed (%d): %s\n",
                       Rc, ReturnCode2String(Rc));
         return -1;
     }
 
-    // Creating a task
-
     INT Pid = UserTaskCreateFromPageTable(Pml4, Entry, Sp, HeapStart, Path);
     if (Pid < 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "run: cannot create task (%d)\n", Pid);
+        StdErrPrintf("run: cannot create task (%d)\n", Pid);
         PagingDestroyUserAddressSpace(Pml4);
         return -1;
     }
 
-    // Waiting for completion
-
     CmdRunWait(Pid);
-
     return 0;
 }
 

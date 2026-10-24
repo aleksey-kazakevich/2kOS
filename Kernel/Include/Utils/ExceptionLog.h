@@ -75,3 +75,12 @@ VOID ExceptionLogDumpLast(VOID);
 
 // String name of the exception type
 const CHAR* ExceptionTypeToString(ExceptionType Type);
+
+/*
+ * Copy up to MaxEntries entries into a user buffer at UserBuf.
+ * Each entry is written as the raw ExceptionLogEntry struct.
+ * Returns the number of bytes written (>= 0) or -errno.
+ *
+ * Requires the current task to have a valid user PageTable.
+ */
+INT ExceptionLogCopyToUser(ExceptionLogEntry *UserBuf, UINT32 MaxEntries);

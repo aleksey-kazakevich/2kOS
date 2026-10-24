@@ -4,13 +4,14 @@
 #include <Drivers/Disk/Sata.h>
 #include <Mem/PhysAlloc.h>
 #include <Mem/Allocator.h>
-#include <Mem/Paging.h>
 #include <Drivers/Pci.h>
+#include <Mem/Paging.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
 #include <Lib/StdIo.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <KDriver.h>
-#include <Basecon.h>
 #include <Asm/Cpu.h>
 #include <Return.h>
 #include <Idt.h>
@@ -34,9 +35,9 @@ STATIC volatile UINT32 GSataErrorCount = 0;
 
 // ==================== DEBUG MACROS ====================
 #define SATA_DEBUG_PRINT(fmt, ...) \
-    BaseconPrintf(BASECON_TYPE_NORMAL, "sata: " fmt, ##__VA_ARGS__)
+    StdOutPrintf("sata: " fmt, ##__VA_ARGS__)
 #define SATA_DEBUG_ERROR(fmt, ...) \
-    BaseconPrintf(BASECON_TYPE_ERROR, "sata: ERROR: " fmt, ##__VA_ARGS__)
+    StdErrPrintf("sata: ERROR: " fmt, ##__VA_ARGS__)
 
 // ==================== FORWARD DECLARATIONS ====================
 VOID SataRegisterDisk(SataPort *Port, INT PortNum);
@@ -1311,7 +1312,7 @@ VOID SataRegisterDisk(SataPort *Port, INT PortNum) {
     }
 
     if (DiskMgrRegisterDisk(SataDisk) == SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "sata: registered %s (%llu MB)\n",
+        StdOutPrintf("sata: registered %s (%llu MB)\n",
                       SataDisk->Name, SataDisk->TotalSize / (1024 * 1024));
     } else {
         MemoryFree(SataDisk);

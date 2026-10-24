@@ -1,10 +1,11 @@
 #include <Drivers/Disk/DiskMgr.h>
 #include <Mem/Allocator.h>
+#include <Io/StdWarn.h>
 #include <Lib/String.h>
+#include <Io/StdOut.h>
 #include <Scheduler.h>
 #include <Lib/StdIo.h>
 #include <Fs/Exfat.h>
-#include <Basecon.h>
 #include <Return.h>
 
 /* ============================================================================
@@ -1453,7 +1454,7 @@ INT ExfatFormat(Disk *Disk, UINT64 StartLba, UINT64 SectorCount) {
     }
 
     UINT32 LastPercent = 0xFFFFFFFF;
-    BaseconPrintf(BASECON_TYPE_NORMAL, "[");
+    StdOutPrintf("[");
 
     for (UINT32 I = 0; I < FatSectors; I += BlockSize) {
         UINT32 Chunk = (I + BlockSize > FatSectors) ? FatSectors - I : BlockSize;
@@ -1475,16 +1476,16 @@ INT ExfatFormat(Disk *Disk, UINT64 StartLba, UINT64 SectorCount) {
         if (Percent != LastPercent) {
             UINT32 Pos = (Percent * 50) / 100;
 
-            BaseconPrintf(BASECON_TYPE_NORMAL, "\r[");
+            StdOutPrintf("\r[");
             for (UINT32 J = 0; J < 50; J++) {
-                BaseconPrintf(BASECON_TYPE_NORMAL, J < Pos ? "=" : (J == Pos ? ">" : " "));
+                StdOutPrintf(J < Pos ? "=" : (J == Pos ? ">" : " "));
             }
-            BaseconPrintf(BASECON_TYPE_NORMAL, "] %3u%%", Percent);
+            StdOutPrintf("] %3u%%", Percent);
             LastPercent = Percent;
         }
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
     MemoryFree(BlockBuf);
     MemoryFree(Fat);
 
@@ -1509,8 +1510,7 @@ INT ExfatFormat(Disk *Disk, UINT64 StartLba, UINT64 SectorCount) {
                                     SectorCount ? SectorCount : Disk->SectorCount,
                                     DISKCFG_FS_EXFAT, "", FALSE);
     if (CfgRc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "fat32: disk.cfg not written (%d)\n", CfgRc);
+        StdWarnPrintf("fat32: disk.cfg not written (%d)\n", CfgRc);
     }
 
     return 0;

@@ -22,3 +22,4 @@ const SyscallLogEntry* SyscallLogGet(UINT32 Index);
 VOID SyscallLogDump(VOID);
 VOID SyscallLogSetEnabled(BOOL Enabled);
 BOOL SyscallLogIsEnabled(VOID);
+INT SyscallLogCopyToUser(SyscallLogEntry *UserBuf, UINT32 MaxEntries);

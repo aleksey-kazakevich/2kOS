@@ -2,8 +2,10 @@
 #include <Drivers/Disk/DiskMgr.h>
 #include <Cmd/RamDisk.h>
 #include <Lib/String.h>
+#include <Io/StdWarn.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Lib/StdIo.h>
-#include <Basecon.h>
 #include <Fs/Vfs.h>
 #include <Return.h>
 #include <Rgb.h>
@@ -13,17 +15,17 @@
 // ============================================================================
 
 STATIC VOID CmdRamDiskHelp(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Usage:\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  ramdisk create <name> <size_mb>\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  ramdisk destroy <name>\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  ramdisk list\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Examples:\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  ramdisk create RAM0 64\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  ramdisk list\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  ramdisk destroy RAM0\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Usage:\n");
+    StdOutPrintf("  ramdisk create <name> <size_mb>\n");
+    StdOutPrintf("  ramdisk destroy <name>\n");
+    StdOutPrintf("  ramdisk list\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Examples:\n");
+    StdOutPrintf("  ramdisk create RAM0 64\n");
+    StdOutPrintf("  ramdisk list\n");
+    StdOutPrintf("  ramdisk destroy RAM0\n");
+    StdOutPrintf("\n");
 }
 
 // ============================================================================
@@ -32,7 +34,7 @@ STATIC VOID CmdRamDiskHelp(VOID) {
 
 STATIC INT CmdRamDiskCreate(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 4) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Usage: ramdisk create <name> <size_mb>\n");
+        StdErrPrintf("Usage: ramdisk create <name> <size_mb>\n");
         return INCORRECT_VALUE;
     }
 
@@ -40,25 +42,25 @@ STATIC INT CmdRamDiskCreate(INT ArgC, const CHAR *ArgV[]) {
     INT SizeMB = AToI(ArgV[3]);
 
     if (SizeMB <= 0) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Invalid size: %s\n", ArgV[3]);
+        StdErrPrintf("Invalid size: %s\n", ArgV[3]);
         return INCORRECT_VALUE;
     }
 
     if (SizeMB > 4096) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Too large (max 4096 MB)\n");
+        StdErrPrintf("Too large (max 4096 MB)\n");
         return INCORRECT_VALUE;
     }
 
     // Checking to see if there is already such a name.
     if (DiskMgrFindDisk(Name)) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Already exists: %s\n", Name);
+        StdErrPrintf("Already exists: %s\n", Name);
         return ALREADY_EXISTS;
     }
 
     UINT64 SizeBytes = (UINT64)SizeMB * 1024 * 1024;
     Disk *D = RamDiskCreate(Name, SizeBytes);
     if (!D) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Failed to create RAMDisk\n");
+        StdErrPrintf("Failed to create RAMDisk\n");
         return NO_MEMORY;
     }
 
@@ -71,7 +73,7 @@ STATIC INT CmdRamDiskCreate(INT ArgC, const CHAR *ArgV[]) {
 
 STATIC INT CmdRamDiskDestroy(INT ArgC, const CHAR *ArgV[]) {
     if (ArgC < 3) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Usage: ramdisk destroy <name>\n");
+        StdErrPrintf("Usage: ramdisk destroy <name>\n");
         return INCORRECT_VALUE;
     }
 
@@ -79,12 +81,12 @@ STATIC INT CmdRamDiskDestroy(INT ArgC, const CHAR *ArgV[]) {
 
     Disk *D = DiskMgrFindDisk(Name);
     if (!D) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Not found: %s\n", Name);
+        StdErrPrintf("Not found: %s\n", Name);
         return NO_OBJECT;
     }
 
     if (D->Type != DISK_TYPE_RAM) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "%s is not a RAMDisk\n", Name);
+        StdErrPrintf("%s is not a RAMDisk\n", Name);
         return INCORRECT_VALUE;
     }
 
@@ -94,21 +96,21 @@ STATIC INT CmdRamDiskDestroy(INT ArgC, const CHAR *ArgV[]) {
     VfsInode *CheckRoot;
     if (VfsWalk(VfsRootInode, CheckPath, &CheckRoot) == 0) {
         VfsInodeUnref(CheckRoot);
-        BaseconPrintf(BASECON_TYPE_WARNING, "Unmounting %s first...\n", Name);
+        StdWarnPrintf("Unmounting %s first...\n", Name);
         VfsUnmountDrive(Name);
     }
 
     // Deleting it from DiskMgr
     INT Ret = DiskMgrUnregisterDisk(D);
     if (Ret != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "Unregister failed (%d)\n", Ret);
+        StdErrPrintf("Unregister failed (%d)\n", Ret);
         return Ret;
     }
 
     // Freeing up memory
     RamDiskDestroy(D);
 
-    BaseconPrintf(BASECON_TYPE_SUCCESS, "Destroyed: %s\n", Name);
+    StdOutPrintf("Destroyed: %s\n", Name);
     return SUCCESS;
 }
 
@@ -117,16 +119,15 @@ STATIC INT CmdRamDiskDestroy(INT ArgC, const CHAR *ArgV[]) {
 // ============================================================================
 
 STATIC INT CmdRamDiskList(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "RAM disks:\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("RAM disks:\n");
 
     INT Count = 0;
     Disk *D = DiskMgrGetFirst();
     while (D) {
         if (D->Type == DISK_TYPE_RAM) {
             UINT64 SizeMB = D->TotalSize / (1024 * 1024);
-            BaseconPrintf(BASECON_TYPE_NORMAL,
-                          "  %-10s  %llu MB  (%llu sectors)\n",
+            StdOutPrintf("  %-10s  %llu MB  (%llu sectors)\n",
                           D->Name, SizeMB, D->SectorCount);
             Count++;
         }
@@ -134,12 +135,12 @@ STATIC INT CmdRamDiskList(VOID) {
     }
 
     if (Count == 0) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  (none)\n");
+        StdOutPrintf("  (none)\n");
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Total: %d RAMDisk(s)\n", Count);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Total: %d RAMDisk(s)\n", Count);
+    StdOutPrintf("\n");
     return SUCCESS;
 }
 
@@ -165,7 +166,7 @@ INT CmdRamDiskHandler(INT ArgC, const CHAR *ArgV[]) {
         return CmdRamDiskList();
     }
 
-    BaseconPrintf(BASECON_TYPE_ERROR, "Unknown subcommand: %s\n", Sub);
+    StdErrPrintf("Unknown subcommand: %s\n", Sub);
     CmdRamDiskHelp();
     return INCORRECT_VALUE;
 }

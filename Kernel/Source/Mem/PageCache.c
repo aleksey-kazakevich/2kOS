@@ -1,10 +1,11 @@
 #include <Mem/PageCache.h>
 #include <Mem/Allocator.h>
+#include <Io/StdWarn.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
+#include <Io/StdOut.h>
 #include <Scheduler.h>
 #include <SpinLock.h>
-#include <Basecon.h>
 #include <Asm/Cpu.h>
 #include <Return.h>
 
@@ -550,12 +551,12 @@ VOID PCacheInit(VOID) {
     INT Pid = TaskCreate(PCacheWritebackThread, KSTACK_SIZE, "pcache-wb");
     if (Pid < 0) {
     	GPCache.WritebackRunning = FALSE;
-    	BaseconPrintf(BASECON_TYPE_WARNING, "pcache: failed to start writeback\n");
+    	StdWarnPrintf("pcache: failed to start writeback\n");
     } else {
     	GPCache.WritebackPid = Pid;
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "pcache: initialized (%u pages, %u MB)\n",
+    StdOutPrintf("pcache: initialized (%u pages, %u MB)\n",
                   GPCache.MaxPages,
                   (UINT32)((UINT64)GPCache.MaxPages * PCACHE_PAGE_SIZE / (1024*1024)));
 }

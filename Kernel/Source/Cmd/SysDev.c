@@ -1,8 +1,9 @@
 #include <Cmd/SysDev.h>
 #include <Lib/String.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <SysDevice.h>
 #include <Lib/StdIo.h>
-#include <Basecon.h>
 #include <Return.h>
 #include <Rgb.h>
 
@@ -48,21 +49,21 @@ STATIC FramebufferColor StateColor(SysDeviceState State) {
 // ============================================================================
 
 STATIC VOID CmdSysDevHelp(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Usage: sysdev <command> [args]\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Commands:\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  list              List all devices (flat)\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  tree              Show device tree\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  info <name|id>    Show detailed info about a device\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  find <substr>     Search devices by name substring\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  type <type>       List devices of a given type\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  count             Show total device count\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Types: root, bus, controller, storage, network,\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "       display, sound, input, serial, timer,\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "       interrupt, power, virtual\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Usage: sysdev <command> [args]\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Commands:\n");
+    StdOutPrintf("  list              List all devices (flat)\n");
+    StdOutPrintf("  tree              Show device tree\n");
+    StdOutPrintf("  info <name|id>    Show detailed info about a device\n");
+    StdOutPrintf("  find <substr>     Search devices by name substring\n");
+    StdOutPrintf("  type <type>       List devices of a given type\n");
+    StdOutPrintf("  count             Show total device count\n");
+    StdOutPrintf("\n");
+    StdOutPrintf("Types: root, bus, controller, storage, network,\n");
+    StdOutPrintf("       display, sound, input, serial, timer,\n");
+    StdOutPrintf("       interrupt, power, virtual\n");
+    StdOutPrintf("\n");
 }
 
 // ============================================================================
@@ -70,11 +71,9 @@ STATIC VOID CmdSysDevHelp(VOID) {
 // ============================================================================
 
 STATIC VOID PrintFlatHeader(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-        "  %-4s %-22s %-10s %-10s %s\n",
+    StdOutPrintf("  %-4s %-22s %-10s %-10s %s\n",
         "ID", "NAME", "TYPE", "STATE", "DESC");
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-        "  %-4s %-22s %-10s %-10s %s\n",
+    StdOutPrintf("  %-4s %-22s %-10s %-10s %s\n",
         "----", "----------------------",
         "----------", "----------", "----");
 }
@@ -83,36 +82,36 @@ STATIC VOID PrintFlatRow(SysDevice *Dev, VOID *UserData) {
     (VOID)UserData;
 
     // ID
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  %-4u ", Dev->Id);
+    /* removed: BaseconSetColors */
+    StdOutPrintf("  %-4u ", Dev->Id);
 
     // Name
-    BaseconSetColors(RGB_WHITE, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "%-22s ", Dev->Name);
+    /* removed: BaseconSetColors */
+    StdOutPrintf("%-22s ", Dev->Name);
 
     // Type
-    BaseconSetColors(TypeColor(Dev->Type), RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "%-10s ",
+    /* removed: BaseconSetColors */
+    StdOutPrintf("%-10s ",
                   SysDeviceTypeToString(Dev->Type));
 
     // State
-    BaseconSetColors(StateColor(Dev->State), RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "%-10s ",
+    /* removed: BaseconSetColors */
+    StdOutPrintf("%-10s ",
                   SysDeviceStateToString(Dev->State));
 
     // Description
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "%s\n", Dev->Description);
+    /* removed: BaseconSetColors */
+    StdOutPrintf("%s\n", Dev->Description);
 }
 
 STATIC INT CmdSysDevList(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
     PrintFlatHeader();
     SysDeviceWalk(PrintFlatRow, NULLPTR);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Total: %u device(s)\n",
+    StdOutPrintf("\n");
+    StdOutPrintf("Total: %u device(s)\n",
                   SysDeviceGetCount());
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
     return 0;
 }
 
@@ -122,12 +121,12 @@ STATIC INT CmdSysDevList(VOID) {
 
 STATIC VOID PrintIndent(INT Depth, BOOL IsLast) {
     for (INT I = 0; I < Depth - 1; I++) {
-        BaseconSetColors(RGB_GRAY, RGB_BLACK);
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  ");
+        /* removed: BaseconSetColors */
+        StdOutPrintf("  ");
     }
     if (Depth > 0) {
-        BaseconSetColors(RGB_GRAY, RGB_BLACK);
-        BaseconPrintf(BASECON_TYPE_NORMAL, IsLast ? "`- " : "|- ");
+        /* removed: BaseconSetColors */
+        StdOutPrintf(IsLast ? "`- " : "|- ");
     }
 }
 
@@ -137,29 +136,29 @@ STATIC VOID DumpTree(SysDevice *Dev, INT Depth, BOOL IsLast) {
     PrintIndent(Depth, IsLast);
 
     // Name (colored by type)
-    BaseconSetColors(TypeColor(Dev->Type), RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "%s", Dev->Name);
+    /* removed: BaseconSetColors */
+    StdOutPrintf("%s", Dev->Name);
 
     // Type + state
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, " [%s, ",
+    /* removed: BaseconSetColors */
+    StdOutPrintf(" [%s, ",
                   SysDeviceTypeToString(Dev->Type));
 
-    BaseconSetColors(StateColor(Dev->State), RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "%s",
+    /* removed: BaseconSetColors */
+    StdOutPrintf("%s",
                   SysDeviceStateToString(Dev->State));
 
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "]");
+    /* removed: BaseconSetColors */
+    StdOutPrintf("]");
 
     // Driver binding
     if (Dev->Driver) {
-        BaseconSetColors(RGB_LIGHT_BLUE, RGB_BLACK);
-        BaseconPrintf(BASECON_TYPE_NORMAL, " <%s>", Dev->Driver->Name);
+        /* removed: BaseconSetColors */
+        StdOutPrintf(" <%s>", Dev->Driver->Name);
     }
 
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    /* removed: BaseconSetColors */
+    StdOutPrintf("\n");
 
     // Children
     ListHead *Pos;
@@ -178,12 +177,12 @@ STATIC VOID WalkTopLevelForTree(SysDevice *Dev, VOID *UserData) {
 }
 
 STATIC INT CmdSysDevTree(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
     SysDeviceWalk(WalkTopLevelForTree, NULLPTR);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Total: %u device(s)\n",
+    StdOutPrintf("\n");
+    StdOutPrintf("Total: %u device(s)\n",
                   SysDeviceGetCount());
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
     return 0;
 }
 
@@ -192,12 +191,12 @@ STATIC INT CmdSysDevTree(VOID) {
 // ============================================================================
 
 STATIC VOID PrintResource(SysDeviceResource *R) {
-    BaseconSetColors(RGB_YELLOW, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "    %-6s ",
+    /* removed: BaseconSetColors */
+    StdOutPrintf("    %-6s ",
                   SysDeviceResTypeToString(R->Type));
 
-    BaseconSetColors(RGB_WHITE, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "0x%08llX - 0x%08llX  (%llu)\n",
+    /* removed: BaseconSetColors */
+    StdOutPrintf("0x%08llX - 0x%08llX  (%llu)\n",
                   R->Base,
                   R->Base + R->Size - 1,
                   R->Size);
@@ -207,23 +206,23 @@ STATIC VOID PrintInfoRecursive(SysDevice *Dev, INT Depth) {
     if (!Dev) return;
 
     for (INT I = 0; I < Depth; I++) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  ");
+        StdOutPrintf("  ");
     }
 
     // Name
-    BaseconSetColors(TypeColor(Dev->Type), RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "%s", Dev->Name);
+    /* removed: BaseconSetColors */
+    StdOutPrintf("%s", Dev->Name);
 
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, " [%s, ",
+    /* removed: BaseconSetColors */
+    StdOutPrintf(" [%s, ",
                   SysDeviceTypeToString(Dev->Type));
 
-    BaseconSetColors(StateColor(Dev->State), RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "%s",
+    /* removed: BaseconSetColors */
+    StdOutPrintf("%s",
                   SysDeviceStateToString(Dev->State));
 
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "] id=%u\n", Dev->Id);
+    /* removed: BaseconSetColors */
+    StdOutPrintf("] id=%u\n", Dev->Id);
 
     ListHead *Pos;
     ListForEach(Pos, &Dev->Children) {
@@ -233,76 +232,76 @@ STATIC VOID PrintInfoRecursive(SysDevice *Dev, INT Depth) {
 }
 
 STATIC VOID PrintDeviceInfo(SysDevice *Dev) {
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
 
     // Header
-    BaseconSetColors(TypeColor(Dev->Type), RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "=== %s ===\n", Dev->Name);
+    /* removed: BaseconSetColors */
+    StdOutPrintf("=== %s ===\n", Dev->Name);
 
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  id:          %u\n", Dev->Id);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  description: %s\n", Dev->Description);
+    /* removed: BaseconSetColors */
+    StdOutPrintf("  id:          %u\n", Dev->Id);
+    StdOutPrintf("  description: %s\n", Dev->Description);
 
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  type:        ");
+    /* removed: BaseconSetColors */
+    StdOutPrintf("  type:        ");
 
-    BaseconSetColors(TypeColor(Dev->Type), RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "%s\n",
+    /* removed: BaseconSetColors */
+    StdOutPrintf("%s\n",
                   SysDeviceTypeToString(Dev->Type));
 
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  state:       ");
+    /* removed: BaseconSetColors */
+    StdOutPrintf("  state:       ");
 
-    BaseconSetColors(StateColor(Dev->State), RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "%s\n",
+    /* removed: BaseconSetColors */
+    StdOutPrintf("%s\n",
                   SysDeviceStateToString(Dev->State));
 
     // Parent
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
+    /* removed: BaseconSetColors */
     if (Dev->Parent) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  parent:      %s\n",
+        StdOutPrintf("  parent:      %s\n",
                       Dev->Parent->Name);
     } else {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  parent:      (none)\n");
+        StdOutPrintf("  parent:      (none)\n");
     }
 
     // Driver
     if (Dev->Driver) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  driver:      ");
-        BaseconSetColors(RGB_LIGHT_BLUE, RGB_BLACK);
-        BaseconPrintf(BASECON_TYPE_NORMAL, "%s\n", Dev->Driver->Name);
+        StdOutPrintf("  driver:      ");
+        /* removed: BaseconSetColors */
+        StdOutPrintf("%s\n", Dev->Driver->Name);
     } else {
-        BaseconSetColors(RGB_GRAY, RGB_BLACK);
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  driver:      (none)\n");
+        /* removed: BaseconSetColors */
+        StdOutPrintf("  driver:      (none)\n");
     }
 
     // Children
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  children:    %u\n", Dev->ChildCount);
+    /* removed: BaseconSetColors */
+    StdOutPrintf("  children:    %u\n", Dev->ChildCount);
 
     // Resources
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  resources:   %u\n", Dev->ResourceCount);
+    /* removed: BaseconSetColors */
+    StdOutPrintf("  resources:   %u\n", Dev->ResourceCount);
     for (UINT32 I = 0; I < Dev->ResourceCount; I++) {
         PrintResource(&Dev->Resources[I]);
     }
 
     // Properties
-    BaseconSetColors(RGB_GRAY, RGB_BLACK);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "  properties:  %u\n", Dev->PropCount);
+    /* removed: BaseconSetColors */
+    StdOutPrintf("  properties:  %u\n", Dev->PropCount);
     for (UINT32 I = 0; I < Dev->PropCount; I++) {
         SysDeviceProp *P = &Dev->Properties[I];
-        BaseconSetColors(RGB_CYAN, RGB_BLACK);
-        BaseconPrintf(BASECON_TYPE_NORMAL, "    %-16s = ",
+        /* removed: BaseconSetColors */
+        StdOutPrintf("    %-16s = ",
                       P->Name);
-        BaseconSetColors(RGB_WHITE, RGB_BLACK);
-        BaseconPrintf(BASECON_TYPE_NORMAL, "%s\n", P->Value);
+        /* removed: BaseconSetColors */
+        StdOutPrintf("%s\n", P->Value);
     }
 
     // Children (tree)
     if (Dev->ChildCount > 0) {
-        BaseconSetColors(RGB_GRAY, RGB_BLACK);
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  subtree:\n");
+        /* removed: BaseconSetColors */
+        StdOutPrintf("  subtree:\n");
         ListHead *Pos;
         ListForEach(Pos, &Dev->Children) {
             SysDevice *Child = ListEntry(Pos, SysDevice, SiblingNode);
@@ -310,12 +309,12 @@ STATIC VOID PrintDeviceInfo(SysDevice *Dev) {
         }
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
 }
 
 STATIC INT CmdSysDevInfo(const CHAR *Arg) {
     if (!Arg) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "usage: sysdev info <name|id>\n");
+        StdErrPrintf("usage: sysdev info <name|id>\n");
         return -1;
     }
 
@@ -329,7 +328,7 @@ STATIC INT CmdSysDevInfo(const CHAR *Arg) {
         Dev = SysDeviceFind(Arg);
     }
     if (!Dev) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "device not found: %s\n", Arg);
+        StdErrPrintf("device not found: %s\n", Arg);
         return -1;
     }
 
@@ -356,20 +355,20 @@ STATIC VOID FindVisitor(SysDevice *Dev, VOID *UserData) {
 
 STATIC INT CmdSysDevFind(const CHAR *Substr) {
     if (!Substr) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "usage: sysdev find <substring>\n");
+        StdErrPrintf("usage: sysdev find <substring>\n");
         return -1;
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
     PrintFlatHeader();
 
     GFindFound = FALSE;
     SysDeviceWalk(FindVisitor, (VOID *)Substr);
 
     if (!GFindFound) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  (no matches)\n");
+        StdOutPrintf("  (no matches)\n");
     }
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
     return 0;
 }
 
@@ -407,27 +406,27 @@ STATIC VOID FilterByType(SysDevice *Dev, VOID *UserData) {
 
 STATIC INT CmdSysDevType(const CHAR *TypeStr) {
     if (!TypeStr) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "usage: sysdev type <type>\n");
+        StdErrPrintf("usage: sysdev type <type>\n");
         return -1;
     }
 
     SysDeviceType Type = ParseType(TypeStr);
     if ((UINT8)Type == 0xFF) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "unknown type: %s\n", TypeStr);
+        StdErrPrintf("unknown type: %s\n", TypeStr);
         return -1;
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
     PrintFlatHeader();
 
     GFilterType = Type;
     GFilterCount = 0;
     SysDeviceWalk(FilterByType, NULLPTR);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Total: %u %s device(s)\n",
+    StdOutPrintf("\n");
+    StdOutPrintf("Total: %u %s device(s)\n",
                   GFilterCount, SysDeviceTypeToString(Type));
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
     return 0;
 }
 
@@ -436,12 +435,10 @@ STATIC INT CmdSysDevType(const CHAR *TypeStr) {
 // ============================================================================
 
 STATIC INT CmdSysDevCount(VOID) {
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "Total devices: %u\n", SysDeviceGetCount());
+    StdOutPrintf("Total devices: %u\n", SysDeviceGetCount());
 
     if (SysDeviceGetRoot()) {
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "Root children: %u\n",
+        StdOutPrintf("Root children: %u\n",
                       SysDeviceGetRoot()->ChildCount);
     }
 
@@ -479,8 +476,8 @@ INT CmdSysDevHandler(INT ArgC, const CHAR *ArgV[]) {
         return CmdSysDevCount();
     }
 
-    BaseconPrintf(BASECON_TYPE_ERROR, "unknown subcommand: %s\n", Cmd);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "Try 'sysdev help'\n");
+    StdErrPrintf("unknown subcommand: %s\n", Cmd);
+    StdOutPrintf("Try 'sysdev help'\n");
     return -1;
 }
 

@@ -2102,7 +2102,7 @@ AsmResult AsmCompileBuffer(const CHAR *Source, USIZE SourceLen,
     if (OutputPath && OutputPath[0]) {
         VfsFile *F = NULLPTR;
         INT Rc = VfsOpen(VfsCurrentDir, OutputPath,
-                         O_WRITE | O_CREAT | O_TRUNC, &F);
+                         VFS_O_WRITE | VFS_O_CREAT | VFS_O_TRUNC, &F);
         if (Rc != SUCCESS) {
             R = MakeResult(ASM_ERR_WRITE, "cannot open output", 0);
         } else {
@@ -2143,7 +2143,7 @@ AsmResult AsmCompileFile(const CHAR *InputPath, const CHAR *OutputPath) {
     }
 
     VfsFile *F = NULLPTR;
-    INT Rc = VfsOpen(VfsCurrentDir, InputPath, O_READ, &F);
+    INT Rc = VfsOpen(VfsCurrentDir, InputPath, VFS_O_READ, &F);
     if (Rc != SUCCESS) {
         return MakeResult(ASM_ERR_READ, "cannot open input", 0);
     }

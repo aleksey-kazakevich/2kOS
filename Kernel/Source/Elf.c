@@ -3,7 +3,7 @@
 #include <Mem/Paging.h>
 #include <Lib/String.h>
 #include <Scheduler.h>
-#include <Basecon.h>
+#include <Io/StdErr.h>
 #include <Return.h>
 #include <Elf.h>
 
@@ -166,9 +166,6 @@ STATIC UINT64 ElfSetupStack(UINT64 *Pml4,
     Sp -= 8;
     UINT64 ArgcVal = (UINT64)ArgC;
     if (PagingCopyToUser(Pml4, Sp, &ArgcVal, 8) != SUCCESS) return 0;
-
-    // Alignment
-    Sp &= ~0xFULL;
 
     return Sp;
 }
@@ -399,9 +396,9 @@ INT UserTaskCreateFromElfFile(const CHAR *Path,
                               INT ArgC, const CHAR *ArgV[]) {
 
     VfsFile *File = NULLPTR;
-    INT Rc = VfsOpen(VfsCurrentDir, Path, O_READ, &File);
+    INT Rc = VfsOpen(VfsCurrentDir, Path, VFS_O_READ, &File);
     if (Rc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "elf: cannot open '%s'\n", Path);
+        StdErrPrintf("elf: cannot open '%s'\n", Path);
         return Rc;
     }
 
@@ -414,7 +411,7 @@ INT UserTaskCreateFromElfFile(const CHAR *Path,
     VfsClose(File);
 
     if (Rc != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "elf: load failed (%d)\n", Rc);
+        StdErrPrintf("elf: load failed (%d)\n", Rc);
         return Rc;
     }
 

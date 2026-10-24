@@ -3,8 +3,10 @@
 #include <Drivers/Pci.h>
 #include <Mem/Paging.h>
 #include <Lib/String.h>
+#include <Io/StdWarn.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Lib/StdIo.h>
-#include <Basecon.h>
 #include <Asm/Io.h>
 #include <Types.h>
 
@@ -623,8 +625,7 @@ STATIC VOID ParseTermList(UINT32 Parent, const UINT8 *Ptr, const UINT8 *End) {
 STATIC VOID ParseTermListInternal(UINT32 Parent, const UINT8 *Ptr,
                                   const UINT8 *End, UINT32 Depth) {
     if (Depth > AML_MAX_PARSE_DEPTH) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "aml: parse depth exceeded at %p\n", Ptr);
+        StdWarnPrintf("aml: parse depth exceeded at %p\n", Ptr);
         return;
     }
 
@@ -1897,8 +1898,7 @@ STATIC BOOL ExecTermList(UINT32 Scope, const UINT8 **Ptr, const UINT8 *End,
                             P2 += 4;
                         }
                         ExecTermList(Scope, &P2, End, Frame, &Arg);
-                        BaseconPrintf(BASECON_TYPE_ERROR,
-                                      "aml: fatal op type=%llu code=0x%llX arg=%llu\n",
+                        StdErrPrintf("aml: fatal op type=%llu code=0x%llX arg=%llu\n",
                                       Type.Integer, Code.Integer, Arg.Integer);
                         Out->Kind = AMLV_INTEGER;
                         Out->Integer = 0xFFFFFFFFFFFFFFFFULL;
@@ -2072,7 +2072,7 @@ VOID AmlInit(SDTHeader *Dsdt, SDTHeader **Ssdts, INT SsdtCount) {
     GAml.Entries[0].Kind = AML_ENTRY_SCOPE;
 
     if (Dsdt) {
-        SDTHeader *VirtDsdt = (SDTHeader *)PhysToVirt((UINT64)Dsdt);
+        SDTHeader *VirtDsdt = Dsdt;
         if (VirtDsdt && VirtDsdt->Length >= 36) {
             const UINT8 *Base = (const UINT8 *)VirtDsdt;
             ParseTermList(0, Base + 36, Base + VirtDsdt->Length);
@@ -2082,14 +2082,13 @@ VOID AmlInit(SDTHeader *Dsdt, SDTHeader **Ssdts, INT SsdtCount) {
     for (INT I = 0; I < SsdtCount; I++) {
         SDTHeader *Phys = Ssdts[I];
         if (!Phys) continue;
-        SDTHeader *Virt = (SDTHeader *)PhysToVirt((UINT64)Phys);
+        SDTHeader *Virt = Ssdts[I];
         if (!Virt || Virt->Length < 36) continue;
         const UINT8 *Base = (const UINT8 *)Virt;
         ParseTermList(0, Base + 36, Base + Virt->Length);
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "aml: parsed %u entries, %u opregions, %u fields\n",
+    StdOutPrintf("aml: parsed %u entries, %u opregions, %u fields\n",
                   GAml.Count, GAml.OpRegionCount, GAml.FieldCount);
 }
 
@@ -2417,11 +2416,11 @@ STATIC VOID DumpEntryRecursive(UINT32 Idx, UINT32 Depth, UINT32 MaxDepth) {
     if (Idx >= GAml.Count) return;
 
     for (UINT32 I = 0; I < Depth; I++) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  ");
+        StdOutPrintf("  ");
     }
 
     AmlName *E = &GAml.Entries[Idx];
-    BaseconPrintf(BASECON_TYPE_NORMAL, "%s [%s]\n",
+    StdOutPrintf("%s [%s]\n",
                   E->Segment[0] ? E->Segment : "\\",
                   EntryKindToStr(E->Kind));
 
@@ -2433,8 +2432,7 @@ STATIC VOID DumpEntryRecursive(UINT32 Idx, UINT32 Depth, UINT32 MaxDepth) {
 }
 
 VOID AmlDumpNamespace(UINT32 MaxDepth) {
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "aml: namespace (%u entries)\n", GAml.Count);
+    StdOutPrintf("aml: namespace (%u entries)\n", GAml.Count);
     for (UINT32 I = 0; I < GAml.Count; I++) {
         if (GAml.Entries[I].Parent == 0) {
             DumpEntryRecursive(I, 0, MaxDepth);
@@ -2452,13 +2450,12 @@ VOID AmlDumpEntry(const CHAR *Path) {
 
     UINT32 Idx = NsResolveFrom(0, Segs, N, IsRoot);
     if (Idx == (UINT32)-1) {
-        BaseconPrintf(BASECON_TYPE_ERROR, "aml: not found: %s\n", Path);
+        StdErrPrintf("aml: not found: %s\n", Path);
         return;
     }
 
     AmlName *E = &GAml.Entries[Idx];
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "aml: %s = %s, kind=%s, code=0x%p len=%u\n",
+    StdOutPrintf("aml: %s = %s, kind=%s, code=0x%p len=%u\n",
                   Path, E->Segment, EntryKindToStr(E->Kind),
                   E->Code, E->CodeLen);
 }

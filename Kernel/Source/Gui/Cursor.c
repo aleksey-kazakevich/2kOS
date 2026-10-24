@@ -2,11 +2,11 @@
 #include <Drivers/Ps2/Ps2Mouse.h>
 #include <Drivers/Framebuffer.h>
 #include <Mem/Allocator.h>
+#include <Io/StdWarn.h>
 #include <Gui/Cursor.h>
 #include <Time/Timer.h>
 #include <Scheduler.h>
 #include <SpinLock.h>
-#include <Basecon.h>
 #include <Return.h>
 #include <Rgb.h>
 
@@ -307,8 +307,7 @@ INT MouseCursorInit(VOID) {
 
     INT Pid = TaskCreate(CursorThread, KSTACK_SIZE, "kcursor");
     if (Pid < 0) {
-        BaseconPrintf(BASECON_TYPE_WARNING,
-                      "cursor: failed to start kcursor thread\n");
+        StdWarnPrintf("cursor: failed to start kcursor thread\n");
     }
 
     Ps2MouseSubscribe(MouseCursorHandler, NULLPTR);

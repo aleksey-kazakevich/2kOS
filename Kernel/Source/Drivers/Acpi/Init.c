@@ -3,16 +3,17 @@
 #include <Limine/LimineParse.h>
 #include <Drivers/Acpi/Acpi.h>
 #include <Drivers/Acpi/Sci.h>
+#include <Mem/Paging.h>
 #include <Lib/String.h>
-#include <Basecon.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Return.h>
 #include <Asm/Io.h>
 #include <Types.h>
 
 STATIC UINT64 FindRsdp(VOID) {
-    UINT64 RsdpAddr = 0;
-    
-    RsdpAddr = LimineGetRsdp();
+    UINT64 RsdpAddr = LimineGetRsdp();
+
     if (RsdpAddr) {
         return RsdpAddr;
     }
@@ -35,11 +36,11 @@ STATIC UINT64 FindRsdp(VOID) {
     }
     
     // We get the EBDA address (0x40E in BDA)
-    UINT16 *EbdaSeg = (UINT16*)0x40E;
+    UINT16 *EbdaSeg = (UINT16*)PhysToVirt(0x40E);
     UINT32 EbdaAddr = (*EbdaSeg) << 4;
     
     if (EbdaAddr >= 0x80000 && EbdaAddr < 0xA0000) {
-        Ptr = (UINT8*)(UINTPTR)EbdaAddr;
+        Ptr = (UINT8*)PhysToVirt(EbdaAddr);
         End = Ptr + 1024;  // EBDA maximum 1KB
         
         while (Ptr < End) {
@@ -61,9 +62,9 @@ STATIC UINT64 FindRsdp(VOID) {
             if (Addr + 8 > 0xFFFFFFFF) break;
             
             // Checking the signature
-            UINT8 *TestPtr = (UINT8*)(UINTPTR)Addr;
+            UINT8 *TestPtr = (UINT8*)PhysToVirt(Addr);
             if (MemCmp(TestPtr, "RSD PTR ", 8) == 0) {
-                RSDPV2 *Rsdp = (RSDPV2*)(UINTPTR)Addr;
+                RSDPV2 *Rsdp = (RSDPV2*)Addr;
                 if (AcpiChecksum(Rsdp, ACPI_RSDP_V1_SIZE) == 0) {
                     RsdpAddr = Addr;
                     return RsdpAddr;
@@ -81,9 +82,9 @@ STATIC UINT64 FindRsdp(VOID) {
         // We skip the PCI/MMIO area (usually there is no RSDP there)
         if (Addr >= 0xA0000000 && Addr < 0xE0000000) continue;
         
-        UINT8 *TestPtr = (UINT8*)(UINTPTR)Addr;
+        UINT8 *TestPtr = (UINT8*)PhysToVirt(Addr);
         if (MemCmp(TestPtr, "RSD PTR ", 8) == 0) {
-            RSDPV2 *Rsdp = (RSDPV2*)(UINTPTR)Addr;
+            RSDPV2 *Rsdp = (RSDPV2*)Addr;
             if (AcpiChecksum(Rsdp, ACPI_RSDP_V1_SIZE) == 0) {
                 RsdpAddr = Addr;
                 return RsdpAddr;
@@ -99,44 +100,44 @@ INT InitAcpiAndApic(VOID) {
 
     INT Result;
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: searching for rsdp... ");
+    StdOutPrintf("acpi: searching for rsdp... ");
     
     UINT64 RsdpAddr = FindRsdp();
     if (!RsdpAddr) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "not found\n");
-        BaseconPrintf(BASECON_TYPE_ERROR, "acpi: rsdp not found\n");
+        StdOutPrintf("not found\n");
+        StdErrPrintf("acpi: rsdp not found\n");
         RETURN(NO_OBJECT);
     }
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "found at 0x%X\n", (UINT32)RsdpAddr);
+    StdOutPrintf("found at 0x%X\n", (UINT32)RsdpAddr);
     
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: initializing... ");
+    StdOutPrintf("acpi: initializing... ");
     
     Result = AcpiInit(RsdpAddr);
     if (Result != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "failed (error %d)\n", Result);
+        StdOutPrintf("failed (error %d)\n", Result);
         RETURN(Result);
     }
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "done\n");
+    StdOutPrintf("done\n");
     
     // Table Information
     Acpi *AcpiObj = AcpiGet();
     if (AcpiObj) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: using %s\n", 
+        StdOutPrintf("acpi: using %s\n", 
                       AcpiObj->UseXsdt ? "xsdt" : "rsdt");
         if (AcpiObj->Fadt) {
-            BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: fadt revision %d\n", 
+            StdOutPrintf("acpi: fadt revision %d\n", 
                           AcpiObj->Fadt->Header.Revision);
         }
         if (AcpiObj->Madt) {
-            BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: madt found\n");
+            StdOutPrintf("acpi: madt found\n");
         }
         if (AcpiObj->Dsdt) {
-            BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: dsdt found\n");
+            StdOutPrintf("acpi: dsdt found\n");
         }
-        BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: %d ssdt's\n", AcpiObj->SsdtCount);
+        StdOutPrintf("acpi: %d ssdt's\n", AcpiObj->SsdtCount);
     }
     
     
@@ -144,16 +145,15 @@ INT InitAcpiAndApic(VOID) {
     UINT32 IoApicCount = AcpiGetIoApicCount();
     UINT32 OverrideCount = AcpiGetOverrideCount();
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: %d processors found\n", ProcCount);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: %d ioapic's found\n", IoApicCount);
-    BaseconPrintf(BASECON_TYPE_NORMAL, "acpi: %d interrupt overrides\n", OverrideCount);
+    StdOutPrintf("acpi: %d processors found\n", ProcCount);
+    StdOutPrintf("acpi: %d ioapic's found\n", IoApicCount);
+    StdOutPrintf("acpi: %d interrupt overrides\n", OverrideCount);
     
     // Processor information
     for (UINT32 I = 0; I < ProcCount; I++) {
         const AcpiProcessor *Proc = AcpiGetProcessor(I);
         if (Proc) {
-            BaseconPrintf(BASECON_TYPE_NORMAL, 
-                          "acpi: cpu %d: apic id %d, %s, %s\n",
+            StdOutPrintf("acpi: cpu %d: apic id %d, %s, %s\n",
                           I,
                           Proc->ApicId,
                           Proc->Enabled ? "enabled" : "disabled",
@@ -165,8 +165,7 @@ INT InitAcpiAndApic(VOID) {
     for (UINT32 I = 0; I < IoApicCount; I++) {
         const AcpiIoApic *Ioapic = AcpiGetIoApic(I);
         if (Ioapic) {
-            BaseconPrintf(BASECON_TYPE_NORMAL,
-                          "acpi: ioapic %d: id %d, addr 0x%X, gsi base %d\n",
+            StdOutPrintf("acpi: ioapic %d: id %d, addr 0x%X, gsi base %d\n",
                           I,
                           Ioapic->Id,
                           Ioapic->Address,
@@ -174,50 +173,49 @@ INT InitAcpiAndApic(VOID) {
         }
     }
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "apic: initializing... ");
+    StdOutPrintf("apic: initializing... ");
     
     Result = ApicInit();
     if (Result != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "failed (error %d)\n", Result);
+        StdOutPrintf("failed (error %d)\n", Result);
         RETURN(Result);
     }
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "done\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "apic: bsp id %d\n", ApicGetId());
-    BaseconPrintf(BASECON_TYPE_NORMAL, "apic: version %d\n", ApicGetVersion());
-    BaseconPrintf(BASECON_TYPE_NORMAL, "apic: mode %s\n", 
+    StdOutPrintf("done\n");
+    StdOutPrintf("apic: bsp id %d\n", ApicGetId());
+    StdOutPrintf("apic: version %d\n", ApicGetVersion());
+    StdOutPrintf("apic: mode %s\n", 
                   ApicIsX2ApicMode() ? "x2apic" : "xapic");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "apic: x2apic support %s\n",
+    StdOutPrintf("apic: x2apic support %s\n",
                   ApicCpuSupportsX2Apic() ? "yes" : "no");
     
     // Enable APIC
-    BaseconPrintf(BASECON_TYPE_NORMAL, "apic: enabling... ");
+    StdOutPrintf("apic: enabling... ");
     ApicEnable();
     if (ApicIsEnabled()) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "done\n");
+        StdOutPrintf("done\n");
     } else {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "failed\n");
+        StdOutPrintf("failed\n");
     }
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ioapic: initializing... ");
+    StdOutPrintf("ioapic: initializing... ");
     
     Result = IoapicInit();
     if (Result != SUCCESS) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "failed (error %d)\n", Result);
-        BaseconPrintf(BASECON_TYPE_NORMAL, "ioapic: initialization failed, interrupts may not work\n");
+        StdOutPrintf("failed (error %d)\n", Result);
+        StdOutPrintf("ioapic: initialization failed, interrupts may not work\n");
         RETURN(Result);
     }
     
-    BaseconPrintf(BASECON_TYPE_NORMAL, "done\n");
-    BaseconPrintf(BASECON_TYPE_NORMAL, "ioapic: %d devices\n", IoapicGetCount());
+    StdOutPrintf("done\n");
+    StdOutPrintf("ioapic: %d devices\n", IoapicGetCount());
     
     // Information about IOAPIC devices
     UINT32 IoapicDevCount = IoapicGetCount();
     for (UINT32 I = 0; I < IoapicDevCount; I++) {
         IoapicDevice *Dev = IoapicGetDevice(I);
         if (Dev) {
-            BaseconPrintf(BASECON_TYPE_NORMAL,
-                          "ioapic: device %d: id %d, gsi base %d, %d irq's\n",
+            StdOutPrintf("ioapic: device %d: id %d, gsi base %d, %d irq's\n",
                           I,
                           Dev->Id,
                           Dev->GsiBase,

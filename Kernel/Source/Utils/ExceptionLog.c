@@ -1,10 +1,12 @@
 #include <Utils/ExceptionLog.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
+#include <Io/StdOut.h>
 #include <Scheduler.h>
 #include <Lib/StdIo.h>
 #include <SpinLock.h>
-#include <Basecon.h>
+#include <Syscall.h>
+#include <Return.h>
 #include <Types.h>
 
 STATIC ExceptionLogEntry GLog[EXCEPTION_LOG_SIZE];
@@ -149,12 +151,11 @@ VOID ExceptionLogDump(VOID) {
 
     SpinLockReleaseIrq(&GLogLock, Flags);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "\nException Log (%u entries, total %u)\n",
+    StdOutPrintf("\nException Log (%u entries, total %u)\n",
                   Count, Total);
 
     if (Count == 0) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  (empty)\n\n");
+        StdOutPrintf("  (empty)\n\n");
         return;
     }
 
@@ -162,21 +163,19 @@ VOID ExceptionLogDump(VOID) {
         const ExceptionLogEntry *E = &Snapshot[I];
         if (!E->Valid) continue;
 
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "[%02u] tick=%llu pid=%d name=%s type=%s\n",
+        StdOutPrintf("[%02u] tick=%llu pid=%d name=%s type=%s\n",
                       I, E->Tick, E->Pid, E->Name,
                       ExceptionTypeToString(E->Type));
 
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "     RIP=0x%llX ERR=0x%llX RSP=0x%llX CS=0x%llX FLG=0x%llX",
+        StdOutPrintf("     RIP=0x%llX ERR=0x%llX RSP=0x%llX CS=0x%llX FLG=0x%llX",
                       E->Rip, E->ErrorCode, E->Rsp, E->Cs, E->Rflags);
 
         if (E->Type == EXC_PAGE_FAULT) {
-            BaseconPrintf(BASECON_TYPE_NORMAL, " CR2=0x%llX", E->FaultAddr);
+            StdOutPrintf(" CR2=0x%llX", E->FaultAddr);
         }
-        BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+        StdOutPrintf("\n");
     }
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
 }
 
 VOID ExceptionLogDumpLast(VOID) {
@@ -195,19 +194,45 @@ VOID ExceptionLogDumpLast(VOID) {
     SpinLockReleaseIrq(&GLogLock, Flags);
 
     if (!Have) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "elog: empty\n");
+        StdOutPrintf("elog: empty\n");
         return;
     }
 
     const ExceptionLogEntry *E = &Last;
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "elog: last: tick=%llu pid=%d name=%s type=%s RIP=0x%llX ERR=0x%llX",
+    StdOutPrintf("elog: last: tick=%llu pid=%d name=%s type=%s RIP=0x%llX ERR=0x%llX",
                   E->Tick, E->Pid, E->Name,
                   ExceptionTypeToString(E->Type),
                   E->Rip, E->ErrorCode);
 
     if (E->Type == EXC_PAGE_FAULT) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, " CR2=0x%llX", E->FaultAddr);
+        StdOutPrintf(" CR2=0x%llX", E->FaultAddr);
     }
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
+}
+
+INT ExceptionLogCopyToUser(ExceptionLogEntry *UserBuf, UINT32 MaxEntries) {
+    if (!UserBuf || MaxEntries == 0) RETURN(INCORRECT_VALUE);
+
+    /* Snapshot under the lock, then copy outside. */
+    ExceptionLogEntry Snapshot[EXCEPTION_LOG_SIZE];
+    UINT32 Count, Total;
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GLogLock);
+    Count = GLogCount;
+    Total = GLogTotal;
+    UINT32 Start = (Count < EXCEPTION_LOG_SIZE) ? 0 : GLogHead;
+    for (UINT32 I = 0; I < Count; I++) {
+        UINT32 Real = (Start + I) % EXCEPTION_LOG_SIZE;
+        Snapshot[I] = GLog[Real];
+    }
+    SpinLockReleaseIrq(&GLogLock, Flags);
+
+    if (Count > MaxEntries) Count = MaxEntries;
+    USIZE Bytes = (USIZE)Count * sizeof(ExceptionLogEntry);
+
+    /* Copy to user. */
+    INT Rc = CopyToUser(UserBuf, Snapshot, Bytes);
+    if (Rc != 0) RETURN(Rc);
+
+    return (INT)Bytes;
 }

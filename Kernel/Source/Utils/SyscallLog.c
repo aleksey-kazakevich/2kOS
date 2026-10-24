@@ -1,10 +1,12 @@
 #include <Utils/SyscallLog.h>
+#include <Mem/Paging.h>
 #include <Lib/String.h>
 #include <Time/Timer.h>
+#include <Io/StdOut.h>
 #include <Scheduler.h>
 #include <Lib/StdIo.h>
 #include <SpinLock.h>
-#include <Basecon.h>
+#include <Return.h>
 
 STATIC SyscallLogEntry GLog[SYSCALL_LOG_SIZE];
 STATIC volatile UINT32 GLogHead = 0;
@@ -33,34 +35,31 @@ BOOL SyscallLogIsEnabled(VOID) {
 INT SyscallLogPush(UINT64 Num, UINT64 *Args, UINT64 Ret) {
     if (!GEnabled) return -1;
 
-    UINTPTR Flags = SpinLockAcquireIrq(&GLogLock);
+    UINT64 Tick = TimerTicks();
+    Task *Current = GetCurrentTask();
+    INT Pid = Current ? Current->Pid : -1;
+    CHAR Name[32];
+    if (Current) {
+        StrnCpy(Name, Current->Name, sizeof(Name) - 1);
+        Name[sizeof(Name) - 1] = '\0';
+    } else {
+        StrCpy(Name, "<none>");
+    }
 
+    UINTPTR Flags = SpinLockAcquireIrq(&GLogLock);
     UINT32 Idx = GLogHead;
     SyscallLogEntry *E = &GLog[Idx];
-
-    E->Tick = TimerTicks();
+    E->Tick = Tick;
+    E->Pid = Pid;
+    StrnCpy(E->Name, Name, sizeof(E->Name) - 1);
+    E->Name[sizeof(E->Name) - 1] = '\0';
     E->Num = Num;
-    for (INT I = 0; I < 6; I++) {
-        E->Args[I] = Args ? Args[I] : 0;
-    }
+    for (INT I = 0; I < 6; I++) E->Args[I] = Args ? Args[I] : 0;
     E->Ret = Ret;
-
-    Task *Current = GetCurrentTask();
-    if (Current) {
-        E->Pid = Current->Pid;
-        StrnCpy(E->Name, Current->Name, sizeof(E->Name) - 1);
-        E->Name[sizeof(E->Name) - 1] = '\0';
-    } else {
-        E->Pid = -1;
-        StrCpy(E->Name, "<none>");
-    }
-
     E->Valid = TRUE;
-
     GLogHead = (GLogHead + 1) % SYSCALL_LOG_SIZE;
     if (GLogCount < SYSCALL_LOG_SIZE) GLogCount++;
     GLogTotal++;
-
     SpinLockReleaseIrq(&GLogLock, Flags);
     return (INT)Idx;
 }
@@ -120,12 +119,11 @@ VOID SyscallLogDump(VOID) {
 
     SpinLockReleaseIrq(&GLogLock, Flags);
 
-    BaseconPrintf(BASECON_TYPE_NORMAL,
-                  "\nSyscall Log (%u entries, total %u)\n",
+    StdOutPrintf("\nSyscall Log (%u entries, total %u)\n",
                   Count, Total);
 
     if (Count == 0) {
-        BaseconPrintf(BASECON_TYPE_NORMAL, "  (empty)\n\n");
+        StdOutPrintf("  (empty)\n\n");
         return;
     }
 
@@ -133,12 +131,41 @@ VOID SyscallLogDump(VOID) {
         const SyscallLogEntry *E = &Snapshot[I];
         if (!E->Valid) continue;
 
-        BaseconPrintf(BASECON_TYPE_NORMAL,
-                      "[%03u] tick=%llu pid=%d name=%s num=%llu (%s) arg1=0x%llX arg2=0x%llX arg3=0x%llX ret=%lld\n",
+        StdOutPrintf("[%03u] tick=%llu pid=%d name=%s num=%llu (%s) arg1=0x%llX arg2=0x%llX arg3=0x%llX ret=%lld\n",
                       I, E->Tick, E->Pid, E->Name, E->Num,
                       SyscallName(E->Num),
                       E->Args[0], E->Args[1], E->Args[2], (INT64)E->Ret);
     }
 
-    BaseconPrintf(BASECON_TYPE_NORMAL, "\n");
+    StdOutPrintf("\n");
+}
+
+INT SyscallLogCopyToUser(SyscallLogEntry *UserBuf, UINT32 MaxEntries) {
+    if (!UserBuf || MaxEntries == 0) RETURN(INCORRECT_VALUE);
+
+    SyscallLogEntry Snapshot[SYSCALL_LOG_SIZE];
+    UINT32 Count, Total;
+
+    UINTPTR Flags = SpinLockAcquireIrq(&GLogLock);
+    Count = GLogCount;
+    Total = GLogTotal;
+    UINT32 Start = (Count < SYSCALL_LOG_SIZE) ? 0 : GLogHead;
+    for (UINT32 I = 0; I < Count; I++) {
+        UINT32 Real = (Start + I) % SYSCALL_LOG_SIZE;
+        Snapshot[I] = GLog[Real];
+    }
+    SpinLockReleaseIrq(&GLogLock, Flags);
+
+    if (Count == 0) RETURN(SUCCESS);
+    if (Count > MaxEntries) Count = MaxEntries;
+    USIZE Bytes = (USIZE)Count * sizeof(SyscallLogEntry);
+
+    Task *Cur = GetCurrentTask();
+    if (!Cur || !Cur->PageTable) RETURN(NO_OBJECT);
+
+    INT Rc = PagingCopyToUser(Cur->PageTable, (UINT64)(UINTPTR)UserBuf,
+                              Snapshot, Bytes);
+    if (Rc != SUCCESS) RETURN(Rc);
+
+    return (INT)Bytes;
 }
