@@ -384,18 +384,26 @@ VOID BaseconSetEnabled(BOOL Enabled) {
 
 VOID BaseconClear(VOID) {
     if (!GBasecon.Initialized) return;
-    if (!BaseconEnabled) return;
 
     UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
 
-    if (GBasecon.PromptFixed) {
-        GBasecon.Scrollback.Count = 0;
-        GBasecon.Scrollback.StartLine = 0;
-        BaseconRedrawFullLocked();
-    } else {
-        GBasecon.CursorX = 0;
-        GBasecon.CursorY = 0;
-        FramebufferClear(GBasecon.Bg);
+    GBasecon.Scrollback.Count = 0;
+    GBasecon.Scrollback.StartLine = 0;
+
+    GBasecon.OutLineLen = 0;
+    GBasecon.OutLineBuffer[0] = '\0';
+
+    GBasecon.CursorX = 0;
+    GBasecon.CursorY = 0;
+
+    /* Only touch the screen if Basecon is actually enabled. */
+    if (BaseconEnabled) {
+        if (GBasecon.PromptFixed) {
+            BaseconRedrawFullLocked();
+        } else {
+            FramebufferClear(GBasecon.Bg);
+            FramebufferSwapBuffers();
+        }
     }
 
     SpinLockReleaseIrq(&GBasecon.Lock, Flags);
@@ -764,24 +772,32 @@ STATIC VOID ConsoleOutThread(VOID) {
     }
 
     while (GRunning) {
-        UINT32 Got = 0;
+        BOOL GotAny = FALSE;
         CHAR Buf[256];
 
-        INT Rc = StdIoReadFrom(GConsoleOutObj, Buf, sizeof(Buf), &Got);
-        if (Rc != SUCCESS || Got == 0) {
-            /* No data — sleep 20 ms and retry. A proper event KObj
-             * would be nicer, but polling is fine for now. */
-            TimerSleep(20);
-            continue;
+        /* Drain the ring completely before sleeping. */
+        while (GRunning) {
+            UINT32 Got = 0;
+            INT Rc = StdIoReadFrom(GConsoleOutObj, Buf, sizeof(Buf), &Got);
+            if (Rc != SUCCESS || Got == 0) break;
+
+            UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+            for (UINT32 I = 0; I < Got; I++) {
+                BaseconPutCharLocked(Buf[I]);
+            }
+            SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+
+            GotAny = TRUE;
         }
 
-        UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
-        for (UINT32 I = 0; I < Got; I++) {
-            BaseconPutCharLocked(Buf[I]);
+        if (GotAny) {
+            UINTPTR Flags = SpinLockAcquireIrq(&GBasecon.Lock);
+            BaseconRedrawFullLocked();
+            FramebufferSwapBuffers();
+            SpinLockReleaseIrq(&GBasecon.Lock, Flags);
+        } else {
+            TimerSleep(20);
         }
-	BaseconRedrawFullLocked();
-	FramebufferSwapBuffers();
-        SpinLockReleaseIrq(&GBasecon.Lock, Flags);
     }
 
     if (GConsoleOutObj) {
