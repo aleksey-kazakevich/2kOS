@@ -96,10 +96,6 @@ STATIC VOID RegisterUserIso(VOID) {
 }
 
 VOID KMain(VOID) {
-    UINT64 Cr4 = ReadCr4();
-    Cr4 |= (1ULL << 9) | (1ULL << 10);
-    WriteCr4(Cr4);
-
     InitStackProtector();
     KDriverInit();
     MemoryInit();
@@ -120,6 +116,8 @@ VOID KMain(VOID) {
 
     CmdLineInit();
     CmdLineSet(LimineGetCmdLine());
+
+    BootLogoShow();
 
     CheckBootFlags();
 
@@ -169,15 +167,16 @@ VOID KMain(VOID) {
     BaseconSetInputCallback(CmdBaseconHandler, NULLPTR);
     InitCmds();
 
-    BaseconSetPrompt("2KOS> ");
-
     DiskCfgInit();
     EnvLoadRoot();
 
     RegisterUserIso();
 
+    BootLogoDestroy();
+
     BaseconSetEnabled(TRUE);
     BaseconSetPromptFixed(TRUE);
+    BaseconSetPrompt("2KOS> ");
     BaseconClear();
     BaseconInputStart();
 

@@ -15,6 +15,7 @@
 #include <Mem/Allocator.h>
 #include <Mem/PageCache.h>
 #include <Drivers/Hpet.h>
+#include <Gui/BootLogo.h>
 #include <Drivers/Pci.h>
 #include <Drivers/Com.h>
 #include <Cmd/DiskMgr.h>

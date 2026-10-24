@@ -117,6 +117,10 @@ VOID FramebufferDrawCursor(INT32 X, INT32 Y, UINT32 W, UINT32 H,
                            INT32 PrevX, INT32 PrevY,
                            UINT32 PrevW, UINT32 PrevH, BOOL PrevValid,
                            const UINT32 *CursorBuffer);
+VOID FramebufferDrawBitmapOpaque(const VOID *BitmapData,
+                                 UINT32 Width, UINT32 Height,
+                                 INT32 X, INT32 Y,
+                                 UINT32 Scale);
 // --- Rendering functions ---
 VOID FramebufferDrawChar(CHAR C, INT32 X, INT32 Y, FramebufferColor Fg, FramebufferColor Bg);
 VOID FramebufferDrawString(const CHAR *Str, INT32 X, INT32 Y, FramebufferColor Fg, FramebufferColor Bg);

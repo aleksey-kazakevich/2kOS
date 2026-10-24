@@ -1,5 +1,4 @@
 #include <Drivers/Irq/Apic/ApicRegs.h>
-#include <Drivers/Irq/Apic/Apic.h>
 #include <Limine/LimineParse.h>
 #include <Drivers/Cpu/Cpu.h>
 #include <Limine/limine.h>
@@ -13,6 +12,7 @@
 #include <Io/StdOut.h>
 #include <Basecon.h>
 #include <Asm/Cpu.h>
+#include <Hal/Irq.h>
 #include <PerCpu.h>
 #include <Return.h>
 #include <Smp.h>
@@ -53,10 +53,10 @@ STATIC VOID SmpSendNmiToAllButSelf(VOID) {
             CpuPause();
         }
     } else {
-        ApicWriteReg(LAPIC_ICR_HIGH, 0);
-        ApicWriteReg(LAPIC_ICR_LOW, (4 << 8) | (3 << 18));
+        HalIrqWriteLocal(LAPIC_ICR_HIGH, 0);
+        HalIrqWriteLocal(LAPIC_ICR_LOW, (4 << 8) | (3 << 18));
         for (INT I = 0; I < 1000000; I++) {
-            UINT32 V = ApicReadReg(LAPIC_ICR_LOW);
+            UINT32 V = HalIrqReadLocal(LAPIC_ICR_LOW);
             if (!(V & ICR_DELIVERY_PENDING)) break;
             CpuPause();
         }
@@ -94,7 +94,7 @@ VOID SchedReschedIpiHandler(VOID) {
         Self->NeedResched = TRUE;
         Self->IpiCount++;
     }
-    ApicEoi();
+    HalIrqEoi();
 }
 
 VOID ApEntry(struct limine_mp_info *Info) {
@@ -130,10 +130,10 @@ VOID ApEntry(struct limine_mp_info *Info) {
     }
 
     /* 4. APIC + timer. TimerIsr is now safe. */
-    ApicEnable();
-    ApicWriteReg(LAPIC_TIMER_DIV, TIMER_DIV_16);
-    ApicWriteReg(LAPIC_LVT_TIMER, TIMER | TIMER_PERIODIC);
-    ApicWriteReg(LAPIC_TIMER_INITCNT, GTimer.InitCount);
+    HalIrqEnableLocal();
+    HalIrqWriteLocal(LAPIC_TIMER_DIV, TIMER_DIV_16);
+    HalIrqWriteLocal(LAPIC_LVT_TIMER, TIMER | TIMER_PERIODIC);
+    HalIrqWriteLocal(LAPIC_TIMER_INITCNT, GTimer.InitCount);
 
     /* 5. Online, counter, print, IF=1. */
     Self->Online = TRUE;
@@ -158,7 +158,7 @@ INT SmpInit(VOID) {
 
         MemSet(&GPerCpu[0], 0, sizeof(PerCpu));
         GPerCpu[0].CpuIndex = 0;
-        GPerCpu[0].LapicId  = ApicGetId();
+        GPerCpu[0].LapicId  = HalIrqGetLocalApicId();
         GPerCpu[0].IsBsp    = TRUE;
         GPerCpu[0].Online   = TRUE;
         SpinLockInit(&GPerCpu[0].Lock);
@@ -169,9 +169,8 @@ INT SmpInit(VOID) {
         TssInitPerCpu(&GPerCpu[0]);
 
         /* IPI Vector registration */
-        IdtSetGate(SCHED_RESCHED_IPI_VECTOR,
-                   (VOID(*)())SchedReschedIpiHandler,
-                   KERNEL_CODE_SEL, IDT_GATE_INT, 0);
+        HalIrqInstallHandler(SCHED_RESCHED_IPI_VECTOR,
+                   (VOID(*)())SchedReschedIpiHandler, 0);
 
         SchedulerInitPerCpu(0);
 
@@ -217,9 +216,8 @@ INT SmpInit(VOID) {
     TssInitPerCpu(Bsp); 
 
     /* IPI vector registration (on BSP; AP will be inherited via idtp). */
-    IdtSetGate(SCHED_RESCHED_IPI_VECTOR,
-               (VOID(*)())SchedReschedIpiHandler,
-               KERNEL_CODE_SEL, IDT_GATE_INT, 0);
+    HalIrqInstallHandler(SCHED_RESCHED_IPI_VECTOR,
+               (VOID(*)())SchedReschedIpiHandler, 0);
 
     /* Initializing the scheduler for BSP: InitTask in PRQ, IdleTask is there. */
     SchedulerInitPerCpu(Bsp->CpuIndex);

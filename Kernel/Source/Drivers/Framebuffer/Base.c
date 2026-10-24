@@ -749,12 +749,16 @@ VOID FramebufferDrawRect(INT32 X, INT32 Y, UINT32 W, UINT32 H, FramebufferColor 
 }
 
 UINT32 Rgb565ToPixel(UINT16 Rgb565) {
-    // Extract 5-6-5 bits
-    UINT8 R = (UINT8)(((Rgb565 >> 11) & 0x1F) << 3);
-    UINT8 G = (UINT8)(((Rgb565 >> 5) & 0x3F) << 2);
-    UINT8 B = (UINT8)((Rgb565 & 0x1F) << 3);
-    
-    FramebufferColor Color = {R, G, B, 255};
+    // Extract 5-6-5 fields and expand to 8 bits by replicating high bits.
+    UINT8 R5 = (UINT8)((Rgb565 >> 11) & 0x1F);
+    UINT8 G6 = (UINT8)((Rgb565 >> 5)  & 0x3F);
+    UINT8 B5 = (UINT8)( Rgb565        & 0x1F);
+
+    UINT8 R = (UINT8)((R5 << 3) | (R5 >> 2));   // 5 -> 8 bits, full range
+    UINT8 G = (UINT8)((G6 << 2) | (G6 >> 4));   // 6 -> 8 bits, full range
+    UINT8 B = (UINT8)((B5 << 3) | (B5 >> 2));   // 5 -> 8 bits, full range
+
+    FramebufferColor Color = { R, G, B, 255 };
     return ColorToPixel(Color);
 }
 
@@ -794,24 +798,33 @@ STATIC VOID DrawBitmapToBuffer(VOID *Buffer,
     
     // Fast path: no scaling, no transparency
     if (Scale == 1 && !UseTransparency) {
-        for (UINT32 Row = 0; Row < DestHeight; Row++) {
+        BOOL Native565 = (Bpp == 2 &&
+                     	 GFramebuffer.Format == FB_FORMAT_RGB565);
+
+    	for (UINT32 Row = 0; Row < DestHeight; Row++) {
             UINT8 *Dst = DstBase + (Y + Row) * Pitch + X * Bpp;
             const UINT16 *SrcRow = Src + Row * BmpWidth;
-            
-            for (UINT32 Col = 0; Col < DestWidth; Col++) {
-                UINT32 Pixel = Rgb565ToPixel(SrcRow[Col]);
-                if (Bpp == 4) {
-                    *(UINT32*)Dst = Pixel;
-                } else if (Bpp == 3) {
-                    Dst[0] = Pixel & 0xFF;
-                    Dst[1] = (Pixel >> 8) & 0xFF;
-                    Dst[2] = (Pixel >> 16) & 0xFF;
-                } else if (Bpp == 2) {
-                    *(UINT16*)Dst = (UINT16)Pixel;
-                }
-                Dst += Bpp;
+
+            if (Native565) {
+            	UINT16 *Dst16 = (UINT16 *)Dst;
+            	for (UINT32 Col = 0; Col < DestWidth; Col++) {
+                    Dst16[Col] = SrcRow[Col];
+            	}
+            } else {
+            	for (UINT32 Col = 0; Col < DestWidth; Col++) {
+                    UINT32 Pixel = Rgb565ToPixel(SrcRow[Col]);
+                    if (Bpp == 4)      *(UINT32*)Dst = Pixel;
+                    else if (Bpp == 3) {
+                    	Dst[0] = Pixel & 0xFF;
+                    	Dst[1] = (Pixel >> 8) & 0xFF;
+                    	Dst[2] = (Pixel >> 16) & 0xFF;
+                    } else if (Bpp == 2) {
+                    	*(UINT16*)Dst = (UINT16)Pixel;
+                    }
+                    Dst += Bpp;
+            	}
             }
-        }
+    	}
         return;
     }
     
@@ -952,4 +965,24 @@ SysDevice *FramebufferRegisterSysDevice(VOID) {
     }
 
     return Display;
+}
+
+VOID FramebufferDrawBitmapOpaque(const VOID *BitmapData,
+                                 UINT32 Width, UINT32 Height,
+                                 INT32 X, INT32 Y, UINT32 Scale) {
+    if (!GFramebuffer.Initialized) return;
+    if (!BitmapData || Width == 0 || Height == 0) return;
+
+    VOID *Buffer = GFramebuffer.Layers[0].Buffer;
+    if (!Buffer) return;
+
+    DrawBitmapToBuffer(Buffer,
+                       GFramebuffer.Width, GFramebuffer.Height,
+                       GFramebuffer.Pitch, GFramebuffer.BytesPerPixel,
+                       BitmapData, Width, Height,
+                       X, Y, Scale,
+                       0x0000,           /* TransparentColor unused */
+                       FALSE);            /* UseTransparency = FALSE */
+
+    FramebufferSwapBuffers();
 }

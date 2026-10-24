@@ -1,5 +1,3 @@
-#include <Drivers/Irq/Apic/Ioapic.h>
-#include <Drivers/Irq/Apic/Apic.h>
 #include <Drivers/Disk/DiskMgr.h>
 #include <Drivers/Disk/Pata.h>
 #include <InterruptList.h>
@@ -12,10 +10,10 @@
 #include <SysDevice.h>
 #include <SpinLock.h>
 #include <KDriver.h>
+#include <Hal/Irq.h>
 #include <Asm/Io.h>
 #include <Return.h>
 #include <Types.h>
-#include <Idt.h>
 
 /* ============================================================================
  * TIMEOUTS
@@ -911,7 +909,7 @@ VOID PataPrimaryIrqHandler(VOID) {
     }
 
     PataCompleteIrqRequest((PataDrive *)PrimaryIrqDrive);
-    ApicEoi();
+    HalIrqEoi();
 }
 
 VOID PataSecondaryIrqHandler(VOID) {
@@ -924,7 +922,7 @@ VOID PataSecondaryIrqHandler(VOID) {
     }
 
     PataCompleteIrqRequest((PataDrive *)SecondaryIrqDrive);
-    ApicEoi();
+    HalIrqEoi();
 }
 
 /* ============================================================================
@@ -1379,19 +1377,19 @@ INT PataInit(PataDrive *Drive, PataChannel Channel, UINT8 DriveNum) {
     }
 
     UINT32 Gsi, Flags;
-    if (IoapicGetOverride(Drive->Irq, &Gsi, &Flags) != 0) {
+    if (HalIrqResolve(Drive->Irq, &Gsi, &Flags) != 0) {
         Gsi = Drive->Irq;
-        Flags = IOAPIC_FLAG_EDGE_TRIGGERED | IOAPIC_FLAG_ACTIVE_HIGH;
+        Flags = HAL_IRQ_FLAG_EDGE_TRIGGERED | HAL_IRQ_FLAG_ACTIVE_HIGH;
     }
 
     UINT8 Vector = 32 + Drive->Irq;
-    IoapicRedirectIrq(Gsi, Vector, ApicGetId(), Flags);
-    IoapicUnmaskIrq(Gsi);
+    HalIrqRoute(Gsi, Vector, HalIrqGetLocalApicId(), Flags);
+    HalIrqUnmask(Gsi);
 
     if (Channel == PATA_CHANNEL_PRIMARY) {
-        IdtSetGate(Vector, PataPrimaryIrq, KERNEL_CODE_SEL, IDT_GATE_INT, 0);
+        HalIrqInstallHandler(Vector, PataPrimaryIrq, 0);
     } else {
-        IdtSetGate(Vector, PataSecondaryIrq, KERNEL_CODE_SEL, IDT_GATE_INT, 0);
+        HalIrqInstallHandler(Vector, PataSecondaryIrq, 0);
     }
 
     SpinLockInit(&GPrimaryQueueLock);

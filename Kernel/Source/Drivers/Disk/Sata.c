@@ -1,5 +1,3 @@
-#include <Drivers/Irq/Apic/Ioapic.h>
-#include <Drivers/Irq/Apic/Apic.h>
 #include <Drivers/Disk/DiskMgr.h>
 #include <Drivers/Disk/Sata.h>
 #include <Mem/PhysAlloc.h>
@@ -13,8 +11,8 @@
 #include <Io/StdErr.h>
 #include <KDriver.h>
 #include <Asm/Cpu.h>
+#include <Hal/Irq.h>
 #include <Return.h>
-#include <Idt.h>
 
 // ==================== IRQ CONFIGURATION ====================
 #define SATA_IRQ_VECTOR     0x42
@@ -279,14 +277,14 @@ VOID SataIrqHandler(VOID) {
     GSataIrqCount++;
 
     if (!GSataHba) {
-        ApicEoi();
+        HalIrqEoi();
         return;
     }
 
     UINT32 Is = GSataHba->Is & GSataHba->Pi;
 
     if (Is == 0) {
-        ApicEoi();
+        HalIrqEoi();
         return;
     }
 
@@ -300,7 +298,7 @@ VOID SataIrqHandler(VOID) {
         }
     }
 
-    ApicEoi();
+    HalIrqEoi();
 }
 
 // ==================== COMMAND EXECUTION (ATA only) ====================
@@ -1129,18 +1127,17 @@ INT SataInit(VOID) {
     }
 
     if (GSataPciDev->InterruptLine > 0 && GSataPciDev->InterruptLine < 16) {
-        UINT32 Flags = IOAPIC_FLAG_EDGE_TRIGGERED | IOAPIC_FLAG_ACTIVE_HIGH;
+        UINT32 Flags = HAL_IRQ_FLAG_EDGE_TRIGGERED | HAL_IRQ_FLAG_ACTIVE_HIGH;
 
-        if (IoapicGetOverride(GSataPciDev->InterruptLine, &GSataIrqGsi, &Flags) != SUCCESS) {
+        if (HalIrqResolve(GSataPciDev->InterruptLine, &GSataIrqGsi, &Flags) != SUCCESS) {
             GSataIrqGsi = GSataPciDev->InterruptLine;
         }
 
-        IdtSetGate(SATA_IRQ_VECTOR, (VOID(*)())SataIrqStub,
-                   KERNEL_CODE_SEL, IDT_GATE_INT, 0);
+        HalIrqInstallHandler(SATA_IRQ_VECTOR, (VOID(*)())SataIrqStub, 0);
 
-        if (IoapicRedirectIrq(GSataIrqGsi, SATA_IRQ_VECTOR,
-                              ApicGetId(), Flags) == SUCCESS) {
-            IoapicUnmaskIrq(GSataIrqGsi);
+        if (HalIrqRoute(GSataIrqGsi, SATA_IRQ_VECTOR,
+                              HalIrqGetLocalApicId(), Flags) == SUCCESS) {
+            HalIrqUnmask(GSataIrqGsi);
             GSataIrqRegistered = TRUE;
         }
     }

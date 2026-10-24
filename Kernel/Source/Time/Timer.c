@@ -1,7 +1,6 @@
 #pragma GCC optimize ("O0")
 
 #include <Drivers/Irq/Apic/ApicRegs.h>
-#include <Drivers/Irq/Apic/Ioapic.h>
 #include <Drivers/Irq/Apic/Apic.h>
 #include <Time/TimerSubscriber.h>
 #include <Drivers/Acpi/Acpi.h>
@@ -9,6 +8,7 @@
 #include <Time/Timer.h>
 #include <Time/Clock.h>
 #include <Asm/Cpu.h>
+#include <Hal/Irq.h>
 #include <Return.h>
 #include <Asm/Io.h>
 #include <Idt.h>
@@ -167,12 +167,12 @@ STATIC UINT32 TimerApicCalibrateWithTsc(UINT32 ExpectedMs) {
     UINT32 ValidMeasurements = 0;
     
     for (INT Sample = 0; Sample < CALIBRATION_LOOPS; Sample++) {
-        ApicWriteReg(LAPIC_TIMER_DIV, TIMER_DIV_16);
-        ApicWriteReg(LAPIC_TIMER_INITCNT, 0);
+        HalIrqWriteLocal(LAPIC_TIMER_DIV, TIMER_DIV_16);
+        HalIrqWriteLocal(LAPIC_TIMER_INITCNT, 0);
         IoBusyWait(100);
-        ApicWriteReg(LAPIC_TIMER_INITCNT, 0xFFFFFFFFU);
+        HalIrqWriteLocal(LAPIC_TIMER_INITCNT, 0xFFFFFFFFU);
         IoBusyWait(100);
-        ApicStart = ApicReadReg(LAPIC_TIMER_CURRCNT);
+        ApicStart = HalIrqReadLocal(LAPIC_TIMER_CURRCNT);
         TscStart = ReadTimeStampCounter();
         UINT64 TscTarget = TscStart + ((UINT64)GTimer.TscKhz * ExpectedMs);
         
@@ -181,8 +181,8 @@ STATIC UINT32 TimerApicCalibrateWithTsc(UINT32 ExpectedMs) {
             IoBusyWait(1);
         } while (TscEnd < TscTarget);
 
-        ApicEnd = ApicReadReg(LAPIC_TIMER_CURRCNT);
-        ApicWriteReg(LAPIC_TIMER_INITCNT, 0);
+        ApicEnd = HalIrqReadLocal(LAPIC_TIMER_CURRCNT);
+        HalIrqWriteLocal(LAPIC_TIMER_INITCNT, 0);
         UINT32 ApicElapsed;
         if (ApicStart >= ApicEnd) {
             ApicElapsed = ApicStart - ApicEnd;
@@ -243,12 +243,12 @@ STATIC BOOL TimerVerifyCalibrationFast(UINT32 VerifyMs) {
         return FALSE;
     }
 
-    ApicWriteReg(LAPIC_TIMER_DIV, TIMER_DIV_16);
-    ApicWriteReg(LAPIC_TIMER_INITCNT, 0);
+    HalIrqWriteLocal(LAPIC_TIMER_DIV, TIMER_DIV_16);
+    HalIrqWriteLocal(LAPIC_TIMER_INITCNT, 0);
     StartTicks = GTimer.Ticks;
 
-    ApicWriteReg(LAPIC_LVT_TIMER, TIMER | TIMER_PERIODIC);
-    ApicWriteReg(LAPIC_TIMER_INITCNT, InitVal);
+    HalIrqWriteLocal(LAPIC_LVT_TIMER, TIMER | TIMER_PERIODIC);
+    HalIrqWriteLocal(LAPIC_TIMER_INITCNT, InitVal);
 
     if (HpetIsAvailable()) {
         HpetDelayMs(VerifyMs);
@@ -260,8 +260,8 @@ STATIC BOOL TimerVerifyCalibrationFast(UINT32 VerifyMs) {
         }
     }
 
-    ApicWriteReg(LAPIC_LVT_TIMER, LVT_MASKED);
-    ApicWriteReg(LAPIC_TIMER_INITCNT, 0);
+    HalIrqWriteLocal(LAPIC_LVT_TIMER, LVT_MASKED);
+    HalIrqWriteLocal(LAPIC_TIMER_INITCNT, 0);
 
     ElapsedTicks = GTimer.Ticks - StartTicks;
     ExpectedTicks = (TestHz * VerifyMs) / 1000;
@@ -337,9 +337,9 @@ VOID TimerInit(UINT32 DesiredFreq) {
     if (InitValue < 2) InitValue = 2;
     GTimer.InitCount = InitValue;
     GTimer.TickHz = DesiredFreq ? DesiredFreq : 1000;
-    ApicWriteReg(LAPIC_TIMER_DIV, TIMER_DIV_16);
-    ApicWriteReg(LAPIC_LVT_TIMER, TIMER | TIMER_PERIODIC);
-    ApicWriteReg(LAPIC_TIMER_INITCNT, InitValue);
+    HalIrqWriteLocal(LAPIC_TIMER_DIV, TIMER_DIV_16);
+    HalIrqWriteLocal(LAPIC_LVT_TIMER, TIMER | TIMER_PERIODIC);
+    HalIrqWriteLocal(LAPIC_TIMER_INITCNT, InitValue);
 
     TimerDelayInit();
     TimerSubscriberInit();
@@ -358,7 +358,7 @@ VOID TimerHandler(VOID) {
     
     TimerSubscriberTick();
 
-    ApicEoi();
+    HalIrqEoi();
 }
 
 UINT64 TimerTicks(VOID) {
