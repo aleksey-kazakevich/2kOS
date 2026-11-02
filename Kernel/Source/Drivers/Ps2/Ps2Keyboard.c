@@ -1,6 +1,4 @@
 #include <Drivers/Ps2/Ps2Keyboard.h>
-#include <Drivers/Irq/Apic/Ioapic.h>
-#include <Drivers/Irq/Apic/Apic.h>
 #include <Drivers/Ps2/Ps2Mouse.h>
 #include <Drivers/Ps2/Ps2.h>
 #include <Lib/String.h>
@@ -9,6 +7,7 @@
 #include <Io/StdErr.h>
 #include <Asm/Cpu.h>
 #include <KDriver.h>
+#include <Hal/Irq.h>
 #include <Asm/Io.h>
 #include <Return.h>
 #include <Idt.h>
@@ -472,7 +471,7 @@ VOID Ps2KeyboardHandleIRQ(VOID) {
         }
     }
 
-    ApicEoi();
+    HalIrqEoi();
     Ps2KeyboardDispatchEvents();
     Ps2MouseDispatchEvents();   // ← suddenly we processed mouse bytes
 }
@@ -776,22 +775,22 @@ INT Ps2KeyboardInit(VOID) {
     }
     
     // Setting up IRQ
-    Result = IoapicGetOverride(1, &Gsi, &Flags);
+    Result = HalIrqResolve(1, &Gsi, &Flags);
     if (IsError(Result).IsError) {
         Gsi = 1;
-        Flags = IOAPIC_FLAG_EDGE_TRIGGERED | IOAPIC_FLAG_ACTIVE_HIGH;
+        Flags = HAL_IRQ_FLAG_EDGE_TRIGGERED | HAL_IRQ_FLAG_ACTIVE_HIGH;
     }
     
     GPs2.Gsi = Gsi;
-    IdtSetGate(KEYBOARD, (VOID(*)())Ps2KeyboardIrq, KERNEL_CODE_SEL, IDT_GATE_INT, 0);
+    HalIrqInstallHandler(KEYBOARD, (VOID(*)())Ps2KeyboardIrq, 0);
     
-    Result = IoapicRedirectIrq(Gsi, KEYBOARD, ApicGetId(), Flags);
+    Result = HalIrqRoute(Gsi, KEYBOARD, HalIrqGetLocalApicId(), Flags);
     if (IsError(Result).IsError) {
         StdErrPrintf("ps2kbd: ioapic redirect failed!\n");
         RETURN(INCORRECT_VALUE);
     }
     
-    IoapicUnmaskIrq(Gsi);
+    HalIrqUnmask(Gsi);
 
     Ps2KeyboardRegisterSysDevice();
     

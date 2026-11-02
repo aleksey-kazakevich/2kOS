@@ -1,6 +1,4 @@
 #include <Drivers/Ps2/Ps2Keyboard.h>
-#include <Drivers/Irq/Apic/Ioapic.h>
-#include <Drivers/Irq/Apic/Apic.h>
 #include <Drivers/Ps2/Ps2Mouse.h>
 #include <Drivers/Ps2/Ps2.h>
 #include <Lib/String.h>
@@ -9,6 +7,7 @@
 #include <Io/StdErr.h>
 #include <Asm/Cpu.h>
 #include <KDriver.h>
+#include <Hal/Irq.h>
 #include <Asm/Io.h>
 #include <Return.h>
 #include <Idt.h>
@@ -500,7 +499,7 @@ VOID Ps2MouseHandleIRQ(VOID) {
         }
     }
 
-    ApicEoi();
+    HalIrqEoi();
     Ps2MouseDispatchEvents();
     Ps2KeyboardDispatchEvents();
 }
@@ -613,23 +612,23 @@ INT Ps2MouseInit(VOID) {
     }
     
     // ====== IRQ setup ======
-    Result = IoapicGetOverride(12, &Gsi, &Flags);
+    Result = HalIrqResolve(12, &Gsi, &Flags);
     if (IsError(Result).IsError) {
         Gsi = 12;
-        Flags = IOAPIC_FLAG_EDGE_TRIGGERED | IOAPIC_FLAG_ACTIVE_HIGH;
+        Flags = HAL_IRQ_FLAG_EDGE_TRIGGERED | HAL_IRQ_FLAG_ACTIVE_HIGH;
     }
     
     GMouse.Gsi = Gsi;
     
-    IdtSetGate(MOUSE, (VOID(*)())Ps2MouseIrq, KERNEL_CODE_SEL, IDT_GATE_INT, 0);
+    HalIrqInstallHandler(MOUSE, (VOID(*)())Ps2MouseIrq, 0);
     
-    Result = IoapicRedirectIrq(Gsi, MOUSE, ApicGetId(), Flags);
+    Result = HalIrqRoute(Gsi, MOUSE, HalIrqGetLocalApicId(), Flags);
     if (IsError(Result).IsError) {
         StdOutPrintf("ps2mouse: ioapic redirect failed!\n");
         RETURN(DEVICE_ERROR);
     }
     
-    IoapicUnmaskIrq(Gsi);
+    HalIrqUnmask(Gsi);
 
     Ps2MouseRegisterSysDevice();
     

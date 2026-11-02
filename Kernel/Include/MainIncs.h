@@ -10,10 +10,12 @@
 #include <Drivers/Acpi/Acpi.h>
 #include <Drivers/Ps2/Ps2.h>
 #include <Drivers/Cpu/Cpu.h>
+#include <Network/Network.h>
 #include <Drivers/Power.h>
 #include <Mem/PhysAlloc.h>
 #include <Mem/Allocator.h>
 #include <Mem/PageCache.h>
+#include <Network/Dhcp.h>
 #include <Drivers/Hpet.h>
 #include <Drivers/Pci.h>
 #include <Drivers/Com.h>
@@ -29,8 +31,8 @@
 #include <Time/Timer.h>
 #include <Gui/Cursor.h>
 #include <Io/StdWarn.h>
-#include <Io/Stdout.h>
-#include <Io/Stderr.h>
+#include <Io/StdOut.h>
+#include <Io/StdErr.h>
 #include <Cmd/Mount.h>
 #include <Lib/StdIo.h>
 #include <Scheduler.h>
@@ -38,7 +40,7 @@
 #include <KObj/KObj.h>
 #include <KObj/Zero.h>
 #include <KObj/Null.h>
-#include <Io/Stdin.h>
+#include <Io/StdIn.h>
 #include <Io/StdIo.h>
 #include <Fs/Exfat.h>
 #include <Fs/Fat32.h>
@@ -49,6 +51,7 @@
 #include <CmdLine.h>
 #include <Cmd/Run.h>
 #include <Cmd/Asm.h>
+#include <Cmd/Net.h>
 #include <Asm/Io.h>
 #include <Cmd/Ls.h>
 #include <Fs/Vfs.h>

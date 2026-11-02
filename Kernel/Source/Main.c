@@ -35,6 +35,7 @@ VOID InitCmds(VOID) {
     CmdRunRegister();
     CmdAsmRegister();
     CmdUnmountRegister();
+    NetCmdRegister();
 }
 
 VOID InitFs(VOID) {
@@ -168,6 +169,11 @@ VOID KMain(VOID) {
     CmdInit();
     BaseconSetInputCallback(CmdBaseconHandler, NULLPTR);
     InitCmds();
+
+    NetworkInit();          /* Ethernet, ARP, IPv4, ICMP, UDP, TCP, DNS, DHCP, Loopback */
+    NetworkLateInit();      /* E1000Init(), Rtl8139Init() — needs PCI, drives NIC hardware */
+
+    DhcpStartOnAllInterfaces(NULLPTR);
 
     BaseconSetPrompt("2KOS> ");
 

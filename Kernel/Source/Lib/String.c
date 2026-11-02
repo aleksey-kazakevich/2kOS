@@ -61,8 +61,8 @@ VOID *MemCpy(VOID *Dst_, const VOID *Src_, USIZE N)
         }
 
         /* Update pointers and remaining bytes */
-        Dst = (UINT8 *)dw;
-        Src = (const UINT8 *)sw;
+        Dst = (UINT8 *)Dw;
+        Src = (const UINT8 *)Sw;
         N = N & (W - 1);
     }
     else
