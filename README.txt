@@ -61,8 +61,9 @@ License
 Project Repository
 ------------------
 
-Main repository: https://github.com/[username]/2kos
-Issue tracker:   https://github.com/[username]/2kos/issues
+Main repository:           https://github.com/aleksey-kazakevich/2kOS
+Issue tracker:             https://github.com/aleksey-kazakevich/2kOS/issues
+Discord channel (russian): https://discord.gg/dyEwsat7BF
 
 ----------------------------------------------------------------
 2kOS - Simple. Clean. From scratch.
